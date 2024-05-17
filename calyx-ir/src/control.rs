@@ -3,7 +3,9 @@ use calyx_frontend::Attribute;
 use super::StaticGroup;
 use std::rc::Rc;
 
-use super::{Attributes, Cell, CombGroup, GetAttributes, Group, Id, Port, RRC};
+use super::{
+    Attributes, BoolAttr, Cell, CombGroup, GetAttributes, Group, Id, Port, RRC,
+};
 
 type StaticLatency = u64;
 
@@ -606,6 +608,58 @@ impl Control {
         };
         static_control
     }
+
+    pub fn approx_size(
+        &self,
+        approx_enable_size: u64,
+        approx_while_repeat_size: u64,
+        approx_if_size: u64,
+    ) -> u64 {
+        match self {
+            Self::Empty(_) => 0,
+            Self::Enable(_) | Self::Invoke(_) => approx_enable_size,
+            Self::Seq(Seq { stmts, .. }) | Self::Par(Par { stmts, .. }) => {
+                let mut sizes_of_sub_controls: Vec<u64> = Vec::new();
+                for control in stmts.iter() {
+                    sizes_of_sub_controls.push(control.approx_size(
+                        approx_enable_size,
+                        approx_while_repeat_size,
+                        approx_if_size,
+                    ))
+                }
+                sizes_of_sub_controls.iter().sum()
+            }
+            Self::Repeat(Repeat { body, .. })
+            | Self::While(While { body, .. }) => {
+                body.approx_size(
+                    approx_enable_size,
+                    approx_while_repeat_size,
+                    approx_if_size,
+                ) + approx_while_repeat_size
+            }
+            Self::If(If {
+                tbranch, fbranch, ..
+            }) => {
+                Self::approx_size(
+                    tbranch,
+                    approx_enable_size,
+                    approx_while_repeat_size,
+                    approx_if_size,
+                ) + Self::approx_size(
+                    fbranch,
+                    approx_enable_size,
+                    approx_while_repeat_size,
+                    approx_if_size,
+                ) + approx_if_size
+            }
+            Self::Static(sc) => sc.approx_size_static(
+                approx_enable_size,
+                approx_while_repeat_size,
+                approx_if_size,
+                false,
+            ),
+        }
+    }
 }
 
 impl StaticControl {
@@ -686,6 +740,57 @@ impl StaticControl {
     pub fn take_static_control(&mut self) -> StaticControl {
         let empty = StaticControl::empty();
         std::mem::replace(self, empty)
+    }
+
+    fn approx_size_static(
+        &self,
+        approx_enable_size: u64,
+        approx_while_repeat_size: u64,
+        approx_if_size: u64,
+        promoted: bool,
+    ) -> u64 {
+        if !(self.get_attributes().has(BoolAttr::Promoted) || promoted) {
+            return approx_enable_size;
+        }
+        match self {
+            Self::Empty(_) => 0,
+            Self::Enable(_) | Self::Invoke(_) => approx_enable_size,
+            Self::Repeat(StaticRepeat { body, .. }) => {
+                body.approx_size_static(
+                    approx_enable_size,
+                    approx_while_repeat_size,
+                    approx_if_size,
+                    true,
+                ) + approx_while_repeat_size
+            }
+            Self::If(StaticIf {
+                tbranch, fbranch, ..
+            }) => {
+                &tbranch.approx_size_static(
+                    approx_enable_size,
+                    approx_while_repeat_size,
+                    approx_if_size,
+                    true,
+                ) + &fbranch.approx_size_static(
+                    approx_enable_size,
+                    approx_while_repeat_size,
+                    approx_if_size,
+                    true,
+                ) + approx_if_size
+            }
+            Self::Par(StaticPar { stmts, .. })
+            | StaticControl::Seq(StaticSeq { stmts, .. }) => stmts
+                .iter()
+                .map(|stmt| {
+                    stmt.approx_size_static(
+                        approx_enable_size,
+                        approx_while_repeat_size,
+                        approx_if_size,
+                        true,
+                    )
+                })
+                .sum(),
+        }
     }
 }
 
