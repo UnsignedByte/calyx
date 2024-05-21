@@ -742,7 +742,7 @@ impl StaticControl {
         std::mem::replace(self, empty)
     }
 
-    fn approx_size_static(
+    pub fn approx_size_static(
         &self,
         approx_enable_size: u64,
         approx_while_repeat_size: u64,

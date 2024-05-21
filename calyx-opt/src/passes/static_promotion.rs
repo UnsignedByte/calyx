@@ -136,69 +136,27 @@ impl StaticPromotion {
     }
 
     fn fits_heuristics(&self, c: &ir::Control) -> bool {
-        let approx_size = Self::approx_size(c);
+        let approx_size = ir::Control::approx_size(
+            c,
+            APPROX_ENABLE_SIZE,
+            APPROX_WHILE_REPEAT_SIZE,
+            APPROX_IF_SIZE,
+        );
         let latency = PromotionAnalysis::get_inferred_latency(c);
         self.within_cycle_limit(latency) && approx_size > self.threshold
-    }
-
-    fn approx_size_static(sc: &ir::StaticControl, promoted: bool) -> u64 {
-        if !(sc.get_attributes().has(ir::BoolAttr::Promoted) || promoted) {
-            return APPROX_ENABLE_SIZE;
-        }
-        match sc {
-            ir::StaticControl::Empty(_) => 0,
-            ir::StaticControl::Enable(_) | ir::StaticControl::Invoke(_) => {
-                APPROX_ENABLE_SIZE
-            }
-            ir::StaticControl::Repeat(ir::StaticRepeat { body, .. }) => {
-                Self::approx_size_static(body, true) + APPROX_WHILE_REPEAT_SIZE
-            }
-            ir::StaticControl::If(ir::StaticIf {
-                tbranch, fbranch, ..
-            }) => {
-                Self::approx_size_static(tbranch, true)
-                    + Self::approx_size_static(fbranch, true)
-                    + APPROX_IF_SIZE
-            }
-            ir::StaticControl::Par(ir::StaticPar { stmts, .. })
-            | ir::StaticControl::Seq(ir::StaticSeq { stmts, .. }) => stmts
-                .iter()
-                .map(|stmt| Self::approx_size_static(stmt, true))
-                .sum(),
-        }
-    }
-
-    /// Calculates the approximate "size" of the control statements.
-    /// Tries to approximate the number of dynamic FSM transitions that will occur
-    fn approx_size(c: &ir::Control) -> u64 {
-        match c {
-            ir::Control::Empty(_) => 0,
-            ir::Control::Enable(_) | ir::Control::Invoke(_) => {
-                APPROX_ENABLE_SIZE
-            }
-            ir::Control::Seq(ir::Seq { stmts, .. })
-            | ir::Control::Par(ir::Par { stmts, .. }) => {
-                stmts.iter().map(Self::approx_size).sum()
-            }
-            ir::Control::Repeat(ir::Repeat { body, .. })
-            | ir::Control::While(ir::While { body, .. }) => {
-                Self::approx_size(body) + APPROX_WHILE_REPEAT_SIZE
-            }
-            ir::Control::If(ir::If {
-                tbranch, fbranch, ..
-            }) => {
-                Self::approx_size(tbranch)
-                    + Self::approx_size(fbranch)
-                    + APPROX_IF_SIZE
-            }
-            ir::Control::Static(sc) => Self::approx_size_static(sc, false),
-        }
     }
 
     /// Uses `approx_size` function to sum the sizes of the control statements
     /// in the given vector
     fn approx_control_vec_size(v: &[ir::Control]) -> u64 {
-        v.iter().map(Self::approx_size).sum()
+        v.iter().fold(0, |acc, elt| {
+            acc + ir::Control::approx_size(
+                elt,
+                APPROX_ENABLE_SIZE,
+                APPROX_WHILE_REPEAT_SIZE,
+                APPROX_IF_SIZE,
+            )
+        })
     }
 
     fn promote_seq_heuristic(
@@ -306,7 +264,14 @@ impl StaticPromotion {
             let (index, _) = control_vec
                 .iter()
                 .enumerate()
-                .max_by_key(|&(_, c)| Self::approx_size(c))
+                .max_by_key(|&(_, c)| {
+                    ir::Control::approx_size(
+                        c,
+                        APPROX_ENABLE_SIZE,
+                        APPROX_WHILE_REPEAT_SIZE,
+                        APPROX_IF_SIZE,
+                    )
+                })
                 .unwrap();
             // Pop the largest element from the vector
             let largest_thread = control_vec.remove(index);
@@ -505,7 +470,14 @@ impl Visitor for StaticPromotion {
         let mut builder = ir::Builder::new(comp, sigs);
         // Check if entire par is promotable
         if let Some(latency) = s.attributes.get(ir::NumAttr::Promotable) {
-            let approx_size: u64 = s.stmts.iter().map(Self::approx_size).sum();
+            let approx_size: u64 = s.stmts.iter().fold(0, |acc, elt| {
+                acc + ir::Control::approx_size(
+                    elt,
+                    APPROX_ENABLE_SIZE,
+                    APPROX_WHILE_REPEAT_SIZE,
+                    APPROX_IF_SIZE,
+                )
+            });
             if approx_size <= self.threshold {
                 // Par is too small to promote, continue.
                 return Ok(Action::Continue);
@@ -554,9 +526,17 @@ impl Visitor for StaticPromotion {
         self.inference_analysis.fixup_if(s);
         let mut builder = ir::Builder::new(comp, sigs);
         if let Some(latency) = s.attributes.get(ir::NumAttr::Promotable) {
-            let approx_size_if = Self::approx_size(&s.tbranch)
-                + Self::approx_size(&s.fbranch)
-                + APPROX_IF_SIZE;
+            let approx_size_if = ir::Control::approx_size(
+                &s.tbranch,
+                APPROX_ENABLE_SIZE,
+                APPROX_WHILE_REPEAT_SIZE,
+                APPROX_IF_SIZE,
+            ) + ir::Control::approx_size(
+                &s.fbranch,
+                APPROX_ENABLE_SIZE,
+                APPROX_WHILE_REPEAT_SIZE,
+                APPROX_IF_SIZE,
+            ) + APPROX_IF_SIZE;
             let branch_diff = PromotionAnalysis::get_inferred_latency(
                 &s.tbranch,
             )
@@ -606,8 +586,12 @@ impl Visitor for StaticPromotion {
         let mut builder = ir::Builder::new(comp, sigs);
         // First check that while loop is promotable
         if let Some(latency) = s.attributes.get(ir::NumAttr::Promotable) {
-            let approx_size =
-                Self::approx_size(&s.body) + APPROX_WHILE_REPEAT_SIZE;
+            let approx_size = ir::Control::approx_size(
+                &s.body,
+                APPROX_ENABLE_SIZE,
+                APPROX_WHILE_REPEAT_SIZE,
+                APPROX_IF_SIZE,
+            ) + APPROX_WHILE_REPEAT_SIZE;
             // Then check that it fits the heuristics
             if approx_size > self.threshold && self.within_cycle_limit(latency)
             {
@@ -652,8 +636,12 @@ impl Visitor for StaticPromotion {
 
         let mut builder = ir::Builder::new(comp, sigs);
         if let Some(latency) = s.attributes.get(ir::NumAttr::Promotable) {
-            let approx_size =
-                Self::approx_size(&s.body) + APPROX_WHILE_REPEAT_SIZE;
+            let approx_size = ir::Control::approx_size(
+                &s.body,
+                APPROX_ENABLE_SIZE,
+                APPROX_WHILE_REPEAT_SIZE,
+                APPROX_IF_SIZE,
+            ) + APPROX_WHILE_REPEAT_SIZE;
             if approx_size > self.threshold && self.within_cycle_limit(latency)
             {
                 // Meets size threshold, so turn repeat into static repeat
