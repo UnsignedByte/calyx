@@ -18,15 +18,13 @@ use calyx_ir::{self as ir, LibrarySignatures};
 /// }
 /// ```
 
+const THRESHOLD: u64 = 20;
 const APPROX_ENABLE_SIZE: u64 = 1;
 const APPROX_IF_SIZE: u64 = 3;
 const APPROX_WHILE_REPEAT_SIZE: u64 = 3;
 
 #[derive(Default)]
-pub struct NewFSMs {
-    /// threshold number of invokations at which to assign new FSM
-    threshold: u64,
-}
+pub struct NewFSMs;
 
 impl Named for NewFSMs {
     fn name() -> &'static str {
@@ -39,7 +37,7 @@ impl Named for NewFSMs {
 }
 
 impl Visitor for NewFSMs {
-    fn start_seq(
+    fn finish_seq(
         &mut self,
         s: &mut ir::Seq,
         _comp: &mut ir::Component,
@@ -48,7 +46,14 @@ impl Visitor for NewFSMs {
     ) -> VisResult {
         // Decide where to split based on the total number of Invoke Control objects we find.
         // Store approx sizes of each statement so we know where to split
+
+        // stores an approx size of each statement in the Seq block
         let mut statement_sizes: Vec<u64> = Vec::new();
+
+        // element i stores size_1 + ... + size_i
+        let mut total_sizes: Vec<u64> = Vec::new();
+
+        // stores total approx size of the Seq block
         let mut total_size: u64 = 0;
 
         for stmt in s.stmts.iter() {
@@ -58,85 +63,89 @@ impl Visitor for NewFSMs {
                 APPROX_WHILE_REPEAT_SIZE,
                 APPROX_IF_SIZE,
             );
+
             statement_sizes.push(approx_stmt_size);
             total_size = total_size + approx_stmt_size;
+            total_sizes.push(total_size);
         }
 
         // exit out if threshold for splitting exceeds the estimated total size
-        if total_size >= self.threshold {
+        if total_size < THRESHOLD {
             return Ok(Action::Continue);
         }
 
         // logic to find the index of the seq which yields the best split
-        let (min_indx_opt, _, _): (Option<u64>, Option<u64>, u64) =
-            statement_sizes
-                .iter()
-                .map(|size| ((*size).abs_diff(total_size.abs_diff(*size))))
-                .fold(
-                    (None, None, 0),
-                    |(min_indx_opt, min_diff_opt, curr_indx), curr_diff| match (
-                        min_indx_opt,
-                        min_diff_opt,
-                    ) {
-                        (None, Some(..)) | (Some(..), None) => {
-                            unreachable!()
-                        }
-                        (None, None) => {
-                            (Some(curr_indx), Some(curr_diff), curr_indx + 1)
-                        }
-                        (Some(min_indx), Some(min_diff)) => {
-                            if curr_diff < min_diff {
-                                (
-                                    Some(curr_indx),
-                                    Some(curr_diff),
-                                    curr_indx + 1,
-                                )
-                            } else {
-                                (Some(min_indx), Some(min_diff), curr_indx + 1)
-                            }
-                        }
-                    },
-                );
-
-        let (fst_stmts, snd_stmts) = match min_indx_opt {
-            // a case against finding an initial min diff that is too low; can do better, first shot
-            None => unreachable!(),
-
-            // split up to and including index `indx`
-            Some(min_indx) => {
-                let mut fst: Vec<ir::Control> = Vec::new();
-                let mut snd: Vec<ir::Control> = Vec::new();
-
-                for (i, c) in s.stmts.drain(..).enumerate() {
-                    if i < (min_indx as usize) {
-                        fst.push(c)
-                    } else {
-                        snd.push(c)
+        let (min_indx_opt, _, _) = total_sizes
+            .iter()
+            .map(|sub_total| {
+                (*sub_total).abs_diff(total_size.abs_diff(*sub_total))
+            })
+            .fold(
+                (None, None, 0),
+                |(min_indx_opt, min_diff_opt, curr_indx), curr_diff| match (
+                    min_indx_opt,
+                    min_diff_opt,
+                ) {
+                    (None, Some(..)) | (Some(..), None) => {
+                        unreachable!()
                     }
-                }
+                    (None, None) => {
+                        (Some(curr_indx), Some(curr_diff), curr_indx + 1)
+                    }
+                    (Some(min_indx), Some(min_diff)) => {
+                        if curr_diff < min_diff {
+                            (Some(curr_indx), Some(curr_diff), curr_indx + 1)
+                        } else {
+                            (Some(min_indx), Some(min_diff), curr_indx + 1)
+                        }
+                    }
+                },
+            );
 
-                (fst, snd)
+        // at best split, split seq into first and second sub-seq blocks, each of which get @new_fsm
+        match min_indx_opt {
+            None => Ok(Action::Continue), // unreachable
+            Some(min_indx) => {
+                let (fst_stmts, snd_stmts) = {
+                    let mut fst: Vec<ir::Control> = Vec::new();
+                    let mut snd: Vec<ir::Control> = Vec::new();
+
+                    for (i, c) in s.stmts.drain(..).enumerate() {
+                        if i <= (min_indx as usize) {
+                            fst.push(c)
+                        } else {
+                            snd.push(c)
+                        }
+                    }
+
+                    (fst, snd)
+                };
+
+                // place @new_fsm attribute at children seq
+                let mut child_attrs = s.attributes.clone();
+                child_attrs.insert(ir::BoolAttr::NewFSM, 1);
+
+                // give first child seq @new_fsm attribute as well
+                let fst_seq = ir::Control::Seq(ir::Seq {
+                    stmts: fst_stmts,
+                    attributes: child_attrs.clone(),
+                });
+
+                // same for second child seq
+                let snd_seq = ir::Control::Seq(ir::Seq {
+                    stmts: snd_stmts,
+                    attributes: child_attrs.clone(),
+                });
+
+                // change parent statements to have exactly two children seqs according to split, along with old attributes
+                let parent_seq = ir::Control::Seq(ir::Seq {
+                    stmts: vec![fst_seq, snd_seq],
+                    attributes: s.attributes.clone(),
+                });
+                let split_seqs = Action::change(parent_seq);
+
+                Ok(split_seqs)
             }
-        };
-
-        // place @new_fsm attribute at parent seq
-        s.attributes.insert(ir::BoolAttr::NewFSM, 1);
-
-        // give first child seq @new_fsm attribute as well
-        let fst_seq = ir::Control::Seq(ir::Seq {
-            stmts: fst_stmts,
-            attributes: s.attributes.clone(),
-        });
-
-        // same for second child seq
-        let snd_seq = ir::Control::Seq(ir::Seq {
-            stmts: snd_stmts,
-            attributes: s.attributes.clone(),
-        });
-
-        // change parent statements to have exactly two children seqs according to split
-        s.stmts = vec![fst_seq, snd_seq];
-
-        return Ok(Action::Continue);
+        }
     }
 }
