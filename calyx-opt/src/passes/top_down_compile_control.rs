@@ -313,6 +313,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
         match encoding {
             Encoding::Binary => {
+                println!("binary");
                 let fsm_size = get_bit_width_from(
                     final_state + 1, /* represent 0..final_state */
                 );
@@ -389,14 +390,18 @@ impl<'b, 'a> Schedule<'b, 'a> {
                 group
             }
             Encoding::OneHot => {
-                let fsm_size = final_state - 1; /* represent 0..final_state */
+                println!("ohe"); // final_state = 2
+                let fsm_size = final_state; /* represent 0..final_state */
+                println!("fsm size {fsm_size}");
 
                 structure!(self.builder;
                     let fsm = prim std_reg(fsm_size);
                     let signal_on = constant(1, 1);
                     let signal_off = constant(0, fsm_size);
-                    let last_state = constant(u64::pow(2, fsm_size.try_into().expect("failed to convert to u32")), fsm_size);
+                    let last_state = constant(u64::pow(2, (final_state - 1).try_into().expect("failed to convert to u32")), fsm_size);
                 );
+
+                println!("after first structure");
                 // Enable assignments
                 group.borrow_mut().assignments.extend(
                     self.enables
@@ -404,8 +409,9 @@ impl<'b, 'a> Schedule<'b, 'a> {
                         .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
                         .flat_map(|(state, mut assigns)| {
 
-                            // initial fsm state is 0
+                            // initial fsm state is 0, need full bit-by-bit comparison
                             if state == 0 {
+                                println!("in state = 0 case ");
                                 let state_guard =
                                 guard!(fsm["out"] == signal_off["out"]);
                                 assigns.iter_mut().for_each(|asgn| {
@@ -414,11 +420,12 @@ impl<'b, 'a> Schedule<'b, 'a> {
                                 });
                                 assigns
                             }
-                            else {
 
+                            // for state != 0, can compare single high bit
+                            else {
+                                println!("in state != 0 case ");
                                 structure!(self.builder; let slicer = prim std_bit_slice(fsm_size, state-1, state, 1););
-                                // self.builder.build_assignment(dst, src, guard);
-                                let _ : [ir::Assignment<Nothing>; 1]  = build_assignments!(self.builder; slicer["in"] = ? fsm["out"];);
+                                self.builder.build_assignment(slicer.borrow().get("in"), fsm.borrow().get("out"), ir::Guard::<Nothing>::True);
                                 let state_guard = guard!(slicer["out"] == signal_on["out"]);
                                 assigns.iter_mut().for_each(|asgn| {
                                     asgn.guard
@@ -436,6 +443,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
                         match s {
                             0 => {
+                                println!("in start = 0 case ");
                                 let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))};
                                 structure!(self.builder;
                                     let end_const = constant(end_constant_value, fsm_size);
@@ -463,6 +471,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
                             }
 
                             s => {
+                                println!("in start != 0 case ");
                                 let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))} ;
                                 structure!(self.builder;
                                 let end_const = constant(end_constant_value, fsm_size);
@@ -941,9 +950,10 @@ impl ConstructVisitor for TopDownCompileControl {
         Ok(TopDownCompileControl {
             dump_fsm: opts[&"dump-fsm"].bool(),
             early_transitions: opts[&"early-transitions"].bool(),
-            one_hot_cutoff: opts[&"one-hot-cutoff"]
-                .pos_num()
-                .expect("requires non-negative OHE cutoff parameter"),
+            // one_hot_cutoff: opts[&"one-hot-cutoff"]
+            //     .pos_num()
+            //     .expect("requires non-negative OHE cutoff parameter"),
+            one_hot_cutoff: 11,
         })
     }
 
