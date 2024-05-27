@@ -208,6 +208,11 @@ fn compute_unique_ids(con: &mut ir::Control, cur_state: u64) -> u64 {
     }
 }
 
+enum Encoding {
+    Binary,
+    OneHot,
+}
+
 /// Represents the dyanmic execution schedule of a control program.
 struct Schedule<'b, 'a: 'b> {
     /// Assigments that should be enabled in a given state.
@@ -217,6 +222,8 @@ struct Schedule<'b, 'a: 'b> {
     /// The component builder. The reference has a shorter lifetime than the builder itself
     /// to allow multiple schedules to use the same builder.
     pub builder: &'b mut ir::Builder<'a>,
+    // Encoding of state within the FSM register
+    // pub _encoding: Encoding,
 }
 
 impl<'b, 'a> From<&'b mut ir::Builder<'a>> for Schedule<'b, 'a> {
@@ -225,6 +232,7 @@ impl<'b, 'a> From<&'b mut ir::Builder<'a>> for Schedule<'b, 'a> {
             enables: HashMap::new(),
             transitions: Vec::new(),
             builder,
+            // _encoding: Encoding::Binary,
         }
     }
 }
@@ -279,7 +287,11 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
     /// Implement a given [Schedule] and return the name of the [ir::Group] that
     /// implements it.
-    fn realize_schedule(self, dump_fsm: bool) -> RRC<ir::Group> {
+    fn realize_schedule(
+        self,
+        dump_fsm: bool,
+        one_hot_cutoff: u64,
+    ) -> RRC<ir::Group> {
         self.validate();
 
         let group = self.builder.add_group("tdcc");
@@ -292,78 +304,219 @@ impl<'b, 'a> Schedule<'b, 'a> {
         }
 
         let final_state = self.last_state();
-        let fsm_size = get_bit_width_from(
-            final_state + 1, /* represent 0..final_state */
-        );
-        structure!(self.builder;
-            let fsm = prim std_reg(fsm_size);
-            let signal_on = constant(1, 1);
-            let last_state = constant(final_state, fsm_size);
-            let first_state = constant(0, fsm_size);
-        );
 
-        // Enable assignments
-        group.borrow_mut().assignments.extend(
-            self.enables
-                .into_iter()
-                .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
-                .flat_map(|(state, mut assigns)| {
-                    let state_const =
-                        self.builder.add_constant(state, fsm_size);
-                    let state_guard = guard!(fsm["out"] == state_const["out"]);
-                    assigns.iter_mut().for_each(|asgn| {
-                        asgn.guard.update(|g| g.and(state_guard.clone()))
-                    });
-                    assigns
-                }),
-        );
+        let encoding = if final_state <= one_hot_cutoff {
+            Encoding::OneHot
+        } else {
+            Encoding::Binary
+        };
 
-        // Transition assignments
-        group.borrow_mut().assignments.extend(
-            self.transitions.into_iter().flat_map(|(s, e, guard)| {
-                structure!(self.builder;
-                    let end_const = constant(e, fsm_size);
-                    let start_const = constant(s, fsm_size);
+        match encoding {
+            Encoding::Binary => {
+                let fsm_size = get_bit_width_from(
+                    final_state + 1, /* represent 0..final_state */
                 );
-                let ec_borrow = end_const.borrow();
-                let trans_guard =
-                    guard!((fsm["out"] == start_const["out"]) & guard);
 
-                vec![
-                    self.builder.build_assignment(
-                        fsm.borrow().get("in"),
-                        ec_borrow.get("out"),
-                        trans_guard.clone(),
+                structure!(self.builder;
+                    let fsm = prim std_reg(fsm_size);
+                    let signal_on = constant(1, 1);
+                    let last_state = constant(final_state, fsm_size);
+                    let first_state = constant(0, fsm_size);
+                );
+                // Enable assignments
+                group.borrow_mut().assignments.extend(
+                    self.enables
+                        .into_iter()
+                        .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
+                        .flat_map(|(state, mut assigns)| {
+                            let state_const =
+                                self.builder.add_constant(state, fsm_size);
+                            let state_guard =
+                                guard!(fsm["out"] == state_const["out"]);
+                            assigns.iter_mut().for_each(|asgn| {
+                                asgn.guard
+                                    .update(|g| g.and(state_guard.clone()))
+                            });
+                            assigns
+                        }),
+                );
+
+                // Transition assignments
+                group.borrow_mut().assignments.extend(
+                    self.transitions.into_iter().flat_map(|(s, e, guard)| {
+                        structure!(self.builder;
+                            let end_const = constant(e, fsm_size);
+                            let start_const = constant(s, fsm_size);
+                        );
+                        let ec_borrow = end_const.borrow();
+                        let trans_guard =
+                            guard!((fsm["out"] == start_const["out"]) & guard);
+
+                        vec![
+                            self.builder.build_assignment(
+                                fsm.borrow().get("in"),
+                                ec_borrow.get("out"),
+                                trans_guard.clone(),
+                            ),
+                            self.builder.build_assignment(
+                                fsm.borrow().get("write_en"),
+                                signal_on.borrow().get("out"),
+                                trans_guard,
+                            ),
+                        ]
+                    }),
+                );
+
+                // Done condition for group
+                let last_guard = guard!(fsm["out"] == last_state["out"]);
+                let done_assign = self.builder.build_assignment(
+                    group.borrow().get("done"),
+                    signal_on.borrow().get("out"),
+                    last_guard.clone(),
+                );
+                group.borrow_mut().assignments.push(done_assign);
+
+                // Cleanup: Add a transition from last state to the first state.
+                let reset_fsm = build_assignments!(self.builder;
+                    fsm["in"] = last_guard ? first_state["out"];
+                    fsm["write_en"] = last_guard ? signal_on["out"];
+                );
+                self.builder
+                    .component
+                    .continuous_assignments
+                    .extend(reset_fsm);
+
+                group
+            }
+            Encoding::OneHot => {
+                let fsm_size = final_state - 1; /* represent 0..final_state */
+
+                structure!(self.builder;
+                    let fsm = prim std_reg(fsm_size);
+                    let signal_on = constant(1, 1);
+                    let signal_off = constant(0, fsm_size);
+                    let last_state = constant(u64::pow(2, fsm_size.try_into().expect("failed to convert to u32")), fsm_size);
+                );
+                // Enable assignments
+                group.borrow_mut().assignments.extend(
+                    self.enables
+                        .into_iter()
+                        .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
+                        .flat_map(|(state, mut assigns)| {
+
+                            // initial fsm state is 0
+                            if state == 0 {
+                                let state_guard =
+                                guard!(fsm["out"] == signal_off["out"]);
+                                assigns.iter_mut().for_each(|asgn| {
+                                asgn.guard
+                                    .update(|g| g.and(state_guard.clone()))
+                                });
+                                assigns
+                            }
+                            else {
+
+                                structure!(self.builder; let slicer = prim std_bit_slice(fsm_size, state-1, state, 1););
+                                // self.builder.build_assignment(dst, src, guard);
+                                let _ : [ir::Assignment<Nothing>; 1]  = build_assignments!(self.builder; slicer["in"] = ? fsm["out"];);
+                                let state_guard = guard!(slicer["out"] == signal_on["out"]);
+                                assigns.iter_mut().for_each(|asgn| {
+                                    asgn.guard
+                                        .update(|g| g.and(state_guard.clone()))
+                                });
+                                assigns
+                            }
+                        }),
+                );
+
+                // Transition assignments
+                group.borrow_mut().assignments.extend(
+                    self.transitions.into_iter().flat_map(
+                        |(s, e, guard)|
+
+                        match s {
+                            0 => {
+                                let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))};
+                                structure!(self.builder;
+                                    let end_const = constant(end_constant_value, fsm_size);
+                                    let start_const = constant(0, fsm_size);
+                                );
+                                let ec_borrow = end_const.borrow();
+
+                                // if s = 0, need to do full comparison
+                                let trans_guard = guard!(
+                                    (fsm["out"] == start_const["out"]) & guard
+                                );
+
+                                vec![
+                                    self.builder.build_assignment(
+                                        fsm.borrow().get("in"),
+                                        ec_borrow.get("out"),
+                                        trans_guard.clone(),
+                                    ),
+                                    self.builder.build_assignment(
+                                        fsm.borrow().get("write_en"),
+                                        signal_on.borrow().get("out"),
+                                        trans_guard,
+                                    ),
+                                ]
+                            }
+
+                            s => {
+                                let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))} ;
+                                structure!(self.builder;
+                                let end_const = constant(end_constant_value, fsm_size);
+
+                                );
+
+                                structure!(self.builder; let slicer = prim std_bit_slice(fsm_size, s-1, s, 1););
+                                // self.builder.build_assignment(dst, src, guard);
+                                let _ : [ir::Assignment<Nothing>; 1]  = build_assignments!(self.builder; slicer["in"] = ? fsm["out"];);
+
+                            let ec_borrow = end_const.borrow();
+                            let trans_guard = guard!(
+                                (slicer["out"] == signal_on["out"]) & guard
+                            );
+
+                            vec![
+                                self.builder.build_assignment(
+                                    fsm.borrow().get("in"),
+                                    ec_borrow.get("out"),
+                                    trans_guard.clone(),
+                                ),
+                                self.builder.build_assignment(
+                                    fsm.borrow().get("write_en"),
+                                    signal_on.borrow().get("out"),
+                                    trans_guard,
+                                ),
+                            ]}
+
+                        }
                     ),
-                    self.builder.build_assignment(
-                        fsm.borrow().get("write_en"),
-                        signal_on.borrow().get("out"),
-                        trans_guard,
-                    ),
-                ]
-            }),
-        );
+                );
 
-        // Done condition for group
-        let last_guard = guard!(fsm["out"] == last_state["out"]);
-        let done_assign = self.builder.build_assignment(
-            group.borrow().get("done"),
-            signal_on.borrow().get("out"),
-            last_guard.clone(),
-        );
-        group.borrow_mut().assignments.push(done_assign);
+                // Done condition for group
+                let last_guard = guard!(fsm["out"] == last_state["out"]);
+                let done_assign = self.builder.build_assignment(
+                    group.borrow().get("done"),
+                    signal_on.borrow().get("out"),
+                    last_guard.clone(),
+                );
+                group.borrow_mut().assignments.push(done_assign);
 
-        // Cleanup: Add a transition from last state to the first state.
-        let reset_fsm = build_assignments!(self.builder;
-            fsm["in"] = last_guard ? first_state["out"];
-            fsm["write_en"] = last_guard ? signal_on["out"];
-        );
-        self.builder
-            .component
-            .continuous_assignments
-            .extend(reset_fsm);
+                // Cleanup: Add a transition from last state to the first state.
+                let reset_fsm = build_assignments!(self.builder;
+                    fsm["in"] = last_guard ? signal_off["out"];
+                    fsm["write_en"] = last_guard ? signal_on["out"];
+                );
+                self.builder
+                    .component
+                    .continuous_assignments
+                    .extend(reset_fsm);
 
-        group
+                group
+            }
+        }
     }
 }
 
@@ -772,6 +925,10 @@ pub struct TopDownCompileControl {
     dump_fsm: bool,
     /// Enable early transitions
     early_transitions: bool,
+    // ========= Pass Options ============
+    /// How many states the static FSM must have before we pick binary encoding over
+    /// one-hot
+    one_hot_cutoff: u64,
 }
 
 impl ConstructVisitor for TopDownCompileControl {
@@ -784,6 +941,9 @@ impl ConstructVisitor for TopDownCompileControl {
         Ok(TopDownCompileControl {
             dump_fsm: opts[&"dump-fsm"].bool(),
             early_transitions: opts[&"early-transitions"].bool(),
+            one_hot_cutoff: opts[&"one-hot-cutoff"]
+                .pos_num()
+                .expect("requires non-negative OHE cutoff parameter"),
         })
     }
 
@@ -855,7 +1015,8 @@ impl Visitor for TopDownCompileControl {
         let mut sch = Schedule::from(&mut builder);
         sch.calculate_states_seq(s, self.early_transitions)?;
         // Compile schedule and return the group.
-        let seq_group = sch.realize_schedule(self.dump_fsm);
+        let seq_group =
+            sch.realize_schedule(self.dump_fsm, self.one_hot_cutoff);
 
         // Add NODE_ID to compiled group.
         let mut en = ir::Control::enable(seq_group);
@@ -881,7 +1042,7 @@ impl Visitor for TopDownCompileControl {
 
         // Compile schedule and return the group.
         sch.calculate_states_if(i, self.early_transitions)?;
-        let if_group = sch.realize_schedule(self.dump_fsm);
+        let if_group = sch.realize_schedule(self.dump_fsm, self.one_hot_cutoff);
 
         // Add NODE_ID to compiled group.
         let mut en = ir::Control::enable(if_group);
@@ -907,7 +1068,7 @@ impl Visitor for TopDownCompileControl {
         sch.calculate_states_while(w, self.early_transitions)?;
 
         // Compile schedule and return the group.
-        let if_group = sch.realize_schedule(self.dump_fsm);
+        let if_group = sch.realize_schedule(self.dump_fsm, self.one_hot_cutoff);
 
         // Add NODE_ID to compiled group.
         let mut en = ir::Control::enable(if_group);
@@ -949,7 +1110,7 @@ impl Visitor for TopDownCompileControl {
                 _ => {
                     let mut sch = Schedule::from(&mut builder);
                     sch.calculate_states(con, self.early_transitions)?;
-                    sch.realize_schedule(self.dump_fsm)
+                    sch.realize_schedule(self.dump_fsm, self.one_hot_cutoff)
                 }
             };
 
@@ -1020,7 +1181,8 @@ impl Visitor for TopDownCompileControl {
         let mut sch = Schedule::from(&mut builder);
         // Add assignments for the final states
         sch.calculate_states(&control.borrow(), self.early_transitions)?;
-        let comp_group = sch.realize_schedule(self.dump_fsm);
+        let comp_group =
+            sch.realize_schedule(self.dump_fsm, self.one_hot_cutoff);
 
         Ok(Action::change(ir::Control::enable(comp_group)))
     }
