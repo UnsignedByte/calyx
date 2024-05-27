@@ -313,7 +313,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
         match encoding {
             Encoding::Binary => {
-                println!("binary");
+
                 let fsm_size = get_bit_width_from(
                     final_state + 1, /* represent 0..final_state */
                 );
@@ -390,9 +390,9 @@ impl<'b, 'a> Schedule<'b, 'a> {
                 group
             }
             Encoding::OneHot => {
-                println!("ohe"); // final_state = 2
+
                 let fsm_size = final_state; /* represent 0..final_state */
-                println!("fsm size {fsm_size}");
+
 
                 structure!(self.builder;
                     let fsm = prim std_reg(fsm_size);
@@ -401,7 +401,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
                     let last_state = constant(u64::pow(2, (final_state - 1).try_into().expect("failed to convert to u32")), fsm_size);
                 );
 
-                println!("after first structure");
+
                 // Enable assignments
                 group.borrow_mut().assignments.extend(
                     self.enables
@@ -411,7 +411,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
                             // initial fsm state is 0, need full bit-by-bit comparison
                             if state == 0 {
-                                println!("in state = 0 case ");
+
                                 let state_guard =
                                 guard!(fsm["out"] == signal_off["out"]);
                                 assigns.iter_mut().for_each(|asgn| {
@@ -423,7 +423,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
                             // for state != 0, can compare single high bit
                             else {
-                                println!("in state != 0 case ");
+
                                 structure!(self.builder; let slicer = prim std_bit_slice(fsm_size, state-1, state, 1););
                                 self.builder.build_assignment(slicer.borrow().get("in"), fsm.borrow().get("out"), ir::Guard::<Nothing>::True);
                                 let state_guard = guard!(slicer["out"] == signal_on["out"]);
@@ -443,7 +443,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
                         match s {
                             0 => {
-                                println!("in start = 0 case ");
+      
                                 let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))};
                                 structure!(self.builder;
                                     let end_const = constant(end_constant_value, fsm_size);
@@ -471,7 +471,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
                             }
 
                             s => {
-                                println!("in start != 0 case ");
+   
                                 let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))} ;
                                 structure!(self.builder;
                                 let end_const = constant(end_constant_value, fsm_size);
@@ -950,10 +950,9 @@ impl ConstructVisitor for TopDownCompileControl {
         Ok(TopDownCompileControl {
             dump_fsm: opts[&"dump-fsm"].bool(),
             early_transitions: opts[&"early-transitions"].bool(),
-            // one_hot_cutoff: opts[&"one-hot-cutoff"]
-            //     .pos_num()
-            //     .expect("requires non-negative OHE cutoff parameter"),
-            one_hot_cutoff: 11,
+            one_hot_cutoff: opts[&"one-hot-cutoff"]
+                .pos_num()
+                .expect("requires non-negative OHE cutoff parameter"),
         })
     }
 
@@ -984,6 +983,12 @@ impl Named for TopDownCompileControl {
                 "Experimental: Enable early transitions for group enables",
                 ParseVal::Bool(false),
                 PassOpt::parse_bool,
+            ),
+            PassOpt::new(
+                "one-hot-cutoff",
+                "The threshold at and below which a one-hot encoding is used for dynamic group scheduling",
+                ParseVal::Num(10),
+                PassOpt::parse_num,
             ),
         ]
     }
