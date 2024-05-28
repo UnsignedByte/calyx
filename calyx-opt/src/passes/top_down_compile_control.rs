@@ -313,7 +313,6 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
         match encoding {
             Encoding::Binary => {
-
                 let fsm_size = get_bit_width_from(
                     final_state + 1, /* represent 0..final_state */
                 );
@@ -390,9 +389,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
                 group
             }
             Encoding::OneHot => {
-
                 let fsm_size = final_state; /* represent 0..final_state */
-
 
                 structure!(self.builder;
                     let fsm = prim std_reg(fsm_size);
@@ -400,7 +397,6 @@ impl<'b, 'a> Schedule<'b, 'a> {
                     let signal_off = constant(0, fsm_size);
                     let last_state = constant(u64::pow(2, (final_state - 1).try_into().expect("failed to convert to u32")), fsm_size);
                 );
-
 
                 // Enable assignments
                 group.borrow_mut().assignments.extend(
@@ -411,26 +407,31 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
                             // initial fsm state is 0, need full bit-by-bit comparison
                             if state == 0 {
-
-                                let state_guard =
-                                guard!(fsm["out"] == signal_off["out"]);
+                                let state_guard = guard!(fsm["out"] == signal_off["out"]);
                                 assigns.iter_mut().for_each(|asgn| {
-                                asgn.guard
-                                    .update(|g| g.and(state_guard.clone()))
-                                });
+                                    asgn.guard
+                                        .update(|g| g.and(state_guard.clone()))
+                                    });
                                 assigns
                             }
 
                             // for state != 0, can compare single high bit
                             else {
-
-                                structure!(self.builder; let slicer = prim std_bit_slice(fsm_size, state-1, state, 1););
-                                self.builder.build_assignment(slicer.borrow().get("in"), fsm.borrow().get("out"), ir::Guard::<Nothing>::True);
+                                structure!(
+                                    self.builder;
+                                    let slicer = prim std_bit_slice(fsm_size, state - 1, state, 1);
+                                );
+                                let fsm_to_slicer = self.builder.build_assignment(
+                                    slicer.borrow().get("in"), 
+                                    fsm.borrow().get("out"), 
+                                    ir::Guard::True
+                                );
                                 let state_guard = guard!(slicer["out"] == signal_on["out"]);
                                 assigns.iter_mut().for_each(|asgn| {
                                     asgn.guard
-                                        .update(|g| g.and(state_guard.clone()))
+                                    .update(|g| g.and(state_guard.clone()))
                                 });
+                                assigns.push(fsm_to_slicer);
                                 assigns
                             }
                         }),
@@ -439,67 +440,69 @@ impl<'b, 'a> Schedule<'b, 'a> {
                 // Transition assignments
                 group.borrow_mut().assignments.extend(
                     self.transitions.into_iter().flat_map(
-                        |(s, e, guard)|
+                        |(s, e, guard)| {
+                            match s {
+                                0 => {
+                                    let end_constant_value = match e {
+                                        0 => 0,
+                                        _ => u64::pow(2, (e - 1).try_into().expect("failed to convert to u32"))
+                                    };
+                                    structure!(self.builder;
+                                        let end_const = constant(end_constant_value, fsm_size);
+                                        let start_const = constant(0, fsm_size);
+                                    );
+                                    let ec_borrow = end_const.borrow();
 
-                        match s {
-                            0 => {
-      
-                                let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))};
-                                structure!(self.builder;
-                                    let end_const = constant(end_constant_value, fsm_size);
-                                    let start_const = constant(0, fsm_size);
-                                );
-                                let ec_borrow = end_const.borrow();
+                                    // if s = 0, need to do full comparison
+                                    let trans_guard = guard!(
+                                        (fsm["out"] == start_const["out"]) & guard
+                                    );
 
-                                // if s = 0, need to do full comparison
-                                let trans_guard = guard!(
-                                    (fsm["out"] == start_const["out"]) & guard
-                                );
+                                    vec![
+                                        self.builder.build_assignment(
+                                            fsm.borrow().get("in"),
+                                            ec_borrow.get("out"),
+                                            trans_guard.clone(),
+                                        ),
+                                        self.builder.build_assignment(
+                                            fsm.borrow().get("write_en"),
+                                            signal_on.borrow().get("out"),
+                                            trans_guard,
+                                        ),
+                                    ]
+                                }
 
-                                vec![
-                                    self.builder.build_assignment(
-                                        fsm.borrow().get("in"),
-                                        ec_borrow.get("out"),
-                                        trans_guard.clone(),
-                                    ),
-                                    self.builder.build_assignment(
-                                        fsm.borrow().get("write_en"),
-                                        signal_on.borrow().get("out"),
-                                        trans_guard,
-                                    ),
-                                ]
+                                s => {
+                                    let end_constant_value = match e {
+                                        0 => 0,
+                                        _ => u64::pow(2, (e - 1).try_into().expect("failed to convert to u32"))
+                                    };
+                                    structure!(
+                                        self.builder;
+                                        let end_const = constant(end_constant_value, fsm_size);
+                                        let slicer = prim std_bit_slice(fsm_size, s - 1, s, 1);
+                                    );
+                                    let ec_borrow = end_const.borrow();
+                                    let trans_guard = guard!((slicer["out"] == signal_on["out"]) & guard);
+                                    let fsm_to_slicer = self.builder.build_assignment(
+                                        slicer.borrow().get("in"),
+                                        fsm.borrow().get("out"), 
+                                        ir::Guard::True);
+                                    vec![
+                                        fsm_to_slicer,
+                                        self.builder.build_assignment(
+                                            fsm.borrow().get("in"),
+                                            ec_borrow.get("out"),
+                                            trans_guard.clone(),
+                                        ),
+                                        self.builder.build_assignment(
+                                            fsm.borrow().get("write_en"),
+                                            signal_on.borrow().get("out"),
+                                            trans_guard,
+                                        ),
+                                    ]
+                                }
                             }
-
-                            s => {
-   
-                                let end_constant_value = if e == 0 {0} else {u64::pow(2, (e-1).try_into().expect("failed to convert to u32"))} ;
-                                structure!(self.builder;
-                                let end_const = constant(end_constant_value, fsm_size);
-
-                                );
-
-                                structure!(self.builder; let slicer = prim std_bit_slice(fsm_size, s-1, s, 1););
-                                // self.builder.build_assignment(dst, src, guard);
-                                let _ : [ir::Assignment<Nothing>; 1]  = build_assignments!(self.builder; slicer["in"] = ? fsm["out"];);
-
-                            let ec_borrow = end_const.borrow();
-                            let trans_guard = guard!(
-                                (slicer["out"] == signal_on["out"]) & guard
-                            );
-
-                            vec![
-                                self.builder.build_assignment(
-                                    fsm.borrow().get("in"),
-                                    ec_borrow.get("out"),
-                                    trans_guard.clone(),
-                                ),
-                                self.builder.build_assignment(
-                                    fsm.borrow().get("write_en"),
-                                    signal_on.borrow().get("out"),
-                                    trans_guard,
-                                ),
-                            ]}
-
                         }
                     ),
                 );
@@ -987,7 +990,7 @@ impl Named for TopDownCompileControl {
             PassOpt::new(
                 "one-hot-cutoff",
                 "The threshold at and below which a one-hot encoding is used for dynamic group scheduling",
-                ParseVal::Num(10),
+                ParseVal::Num(10000),
                 PassOpt::parse_num,
             ),
         ]
