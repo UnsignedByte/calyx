@@ -400,6 +400,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
                     let fsm = prim std_reg(fsm_size);
                     let signal_on = constant(1, 1);
                     let signal_off = constant(0, fsm_size);
+                    let last_state = constant(u64::pow(2, (final_state - 1).try_into().expect("failed to convert to u32")), fsm_size);
                 );
 
                 // Enable assignments
@@ -557,62 +558,25 @@ impl<'b, 'a> Schedule<'b, 'a> {
                 );
 
                 // Done condition for group
-                match used_slicers.get(&(final_state - 1, final_state)) {
-                    None => {
-                        structure!(
-                            self.builder;
-                            let slicer = prim std_bit_slice(fsm_size, final_state - 1, final_state, 1);
-                        );
-                        let fsm_to_slicer = self.builder.build_assignment(
-                            slicer.borrow().get("in"),
-                            fsm.borrow().get("out"),
-                            ir::Guard::True,
-                        );
-                        let last_guard =
-                            guard!(slicer["out"] == signal_on["out"]);
-                        let done_assign = self.builder.build_assignment(
-                            group.borrow().get("done"),
-                            signal_on.borrow().get("out"),
-                            last_guard.clone(),
-                        );
-                        group.borrow_mut().assignments.push(fsm_to_slicer);
-                        group.borrow_mut().assignments.push(done_assign);
+                let last_guard = guard!(fsm["out"] == last_state["out"]);
+                let done_assign = self.builder.build_assignment(
+                    group.borrow().get("done"),
+                    signal_on.borrow().get("out"),
+                    last_guard.clone(),
+                );
+                group.borrow_mut().assignments.push(done_assign);
 
-                        // Cleanup: Add a transition from last state to the first state.
-                        let reset_fsm = build_assignments!(self.builder;
-                            fsm["in"] = last_guard ? signal_off["out"];
-                            fsm["write_en"] = last_guard ? signal_on["out"];
-                        );
-                        self.builder
-                            .component
-                            .continuous_assignments
-                            .extend(reset_fsm);
+                // Cleanup: Add a transition from last state to the first state.
+                let reset_fsm = build_assignments!(self.builder;
+                    fsm["in"] = last_guard ? signal_off["out"];
+                    fsm["write_en"] = last_guard ? signal_on["out"];
+                );
+                self.builder
+                    .component
+                    .continuous_assignments
+                    .extend(reset_fsm);
 
-                        group
-                    }
-                    Some(slicer) => {
-                        let last_guard =
-                            guard!(slicer["out"] == signal_on["out"]);
-                        let done_assign = self.builder.build_assignment(
-                            group.borrow().get("done"),
-                            signal_on.borrow().get("out"),
-                            last_guard.clone(),
-                        );
-                        group.borrow_mut().assignments.push(done_assign);
-
-                        // Cleanup: Add a transition from last state to the first state.
-                        let reset_fsm = build_assignments!(self.builder;
-                            fsm["in"] = last_guard ? signal_off["out"];
-                            fsm["write_en"] = last_guard ? signal_on["out"];
-                        );
-                        self.builder
-                            .component
-                            .continuous_assignments
-                            .extend(reset_fsm);
-
-                        group
-                    }
-                }
+                group
             }
         }
     }
@@ -1076,7 +1040,7 @@ impl Named for TopDownCompileControl {
             PassOpt::new(
                 "one-hot-cutoff",
                 "The threshold at and below which a one-hot encoding is used for dynamic group scheduling",
-                ParseVal::Num(64),
+                ParseVal::Num(0),
                 PassOpt::parse_num,
             ),
         ]
