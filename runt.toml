@@ -249,6 +249,28 @@ fud exec --from calyx --to jq \
 """
 timeout = 120
 
+[[tests]]
+name = "correctness new_fsm insertion into seq block"
+paths = [
+  "tests/correctness/*.futil",
+  "tests/correctness/ref-cells/*.futil",
+  "tests/correctness/sync/*.futil",
+  "tests/correctness/static-interface/*.futil",
+]
+cmd = """
+fud exec --from calyx --to jq \
+         --through verilog \
+         --through dat \
+         -s calyx.exec './target/debug/calyx' \
+         -s calyx.flags '-x new-fsm:new-fsm-threshold=15' \
+         -s verilog.cycle_limit 500 \
+         -s verilog.data {}.data \
+         -s jq.expr ".memories" \
+         {} -q
+"""
+timeout = 120
+
+
 # Variants of the above but for `--nested` (non-ANF Verilog emission) mode.
 [[tests]]
 name = "correctness nested"

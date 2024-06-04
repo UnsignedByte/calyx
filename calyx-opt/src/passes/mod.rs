@@ -45,6 +45,7 @@ mod unroll_bound;
 mod well_formed;
 mod wire_inliner;
 mod wrap_main;
+mod new_fsm;
 
 pub use canonical::Canonicalize;
 pub use cell_share::CellShare;
@@ -70,6 +71,7 @@ pub use infer_share::InferShare;
 pub use lower_guards::LowerGuards;
 pub use math_utilities::get_bit_width_from;
 pub use merge_assign::MergeAssign;
+pub use new_fsm::NewFSMs;
 pub use papercut::Papercut;
 pub use par_to_seq::ParToSeq;
 pub use register_unsharing::RegisterUnsharing;

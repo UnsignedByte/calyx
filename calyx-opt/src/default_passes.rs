@@ -5,8 +5,8 @@ use crate::passes::{
     CompileSyncWithoutSyncReg, ComponentInliner, DataPathInfer,
     DeadAssignmentRemoval, DeadCellRemoval, DeadGroupRemoval, DefaultAssigns,
     DiscoverExternal, ExternalToRef, Externalize, GoInsertion, GroupToInvoke,
-    GroupToSeq, HoleInliner, InferShare, LowerGuards, MergeAssign, Papercut,
-    ParToSeq, RegisterUnsharing, RemoveIds, ResetInsertion,
+    GroupToSeq, HoleInliner, InferShare, LowerGuards, MergeAssign, NewFSMs,
+    Papercut, ParToSeq, RegisterUnsharing, RemoveIds, ResetInsertion,
     SimplifyStaticGuards, SimplifyWithControl, StaticFSMOpts, StaticInference,
     StaticInliner, StaticPromotion, SynthesisPapercut, TopDownCompileControl,
     UnrollBounded, WellFormed, WireInliner, WrapMain,
@@ -29,6 +29,7 @@ impl PassManager {
         pm.register_pass::<CombProp>()?;
         pm.register_pass::<ComponentInliner>()?;
         pm.register_pass::<CollapseControl>()?;
+        pm.register_pass::<NewFSMs>()?;
         pm.register_pass::<DeadAssignmentRemoval>()?;
         pm.register_pass::<DeadCellRemoval>()?;
         pm.register_pass::<DeadGroupRemoval>()?;
