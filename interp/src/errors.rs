@@ -3,7 +3,7 @@ use crate::{
     flatten::flat_ir::prelude::AssignedValue, utils::assignment_to_string,
 };
 use calyx_ir::{self as ir, Assignment, Id};
-use calyx_utils::Error as CalyxError;
+use calyx_utils::{Error as CalyxError, MultiError as CalyxMultiError};
 use rustyline::error::ReadlineError;
 use thiserror::Error;
 
@@ -11,6 +11,12 @@ use thiserror::Error;
 pub type InterpreterResult<T> = Result<T, BoxedInterpreterError>;
 
 pub struct BoxedInterpreterError(Box<InterpreterError>);
+
+impl BoxedInterpreterError {
+    pub fn into_inner(&mut self) -> &mut InterpreterError {
+        &mut self.0
+    }
+}
 
 impl std::fmt::Display for BoxedInterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -91,6 +97,10 @@ pub enum InterpreterError {
     /// Wrapper error for parsing & related compiler errors
     #[error("{0:?}")]
     CompilerError(Box<CalyxError>),
+
+    /// Wrapper error for compiler multi errors
+    #[error("{0:?}")]
+    CompilerMultiError(Box<CalyxMultiError>),
 
     /// There is no main component in the given program
     #[error("no main component")]
@@ -179,16 +189,22 @@ pub enum InterpreterError {
     IOError(#[from] std::io::Error),
 
     //TODO Griffin: Make this more descriptive
-    #[error("Attempted to write an undefined value to register or memory")]
-    UndefinedWrite,
+    #[error(
+        "Attempted to write an undefined value to register or memory named \"{0}\""
+    )]
+    UndefinedWrite(String),
 
     //TODO Griffin: Make this more descriptive
-    #[error("Attempted to write an undefined memory address")]
-    UndefinedWriteAddr,
+    #[error(
+        "Attempted to write an undefined memory address in memory named \"{0}\""
+    )]
+    UndefinedWriteAddr(String),
 
     // TODO Griffin: Make this more descriptive
-    #[error("Attempted to read an undefined memory address")]
-    UndefinedReadAddr,
+    #[error(
+        "Attempted to read an undefined memory address from memory named \"{0}\""
+    )]
+    UndefinedReadAddr(String),
 
     #[error(transparent)]
     SerializationError(
@@ -223,6 +239,12 @@ impl std::fmt::Debug for InterpreterError {
 impl From<CalyxError> for InterpreterError {
     fn from(e: CalyxError) -> Self {
         Self::CompilerError(Box::new(e))
+    }
+}
+
+impl From<CalyxMultiError> for InterpreterError {
+    fn from(e: CalyxMultiError) -> Self {
+        Self::CompilerMultiError(Box::new(e))
     }
 }
 
