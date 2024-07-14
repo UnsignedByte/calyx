@@ -764,12 +764,12 @@ impl StaticControl {
             Self::If(StaticIf {
                 tbranch, fbranch, ..
             }) => {
-                &tbranch.approx_size_static(
+                tbranch.approx_size_static(
                     approx_enable_size,
                     approx_while_repeat_size,
                     approx_if_size,
                     true,
-                ) + &fbranch.approx_size_static(
+                ) + fbranch.approx_size_static(
                     approx_enable_size,
                     approx_while_repeat_size,
                     approx_if_size,

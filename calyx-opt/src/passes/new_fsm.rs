@@ -95,7 +95,7 @@ impl Visitor for NewFSMs {
             );
 
             statement_sizes.push(approx_stmt_size);
-            total_size = total_size + approx_stmt_size;
+            total_size += approx_stmt_size;
             total_sizes.push(total_size);
         }
 

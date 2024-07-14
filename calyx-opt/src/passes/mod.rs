@@ -38,6 +38,7 @@ mod add_guard;
 mod data_path_infer;
 mod default_assigns;
 mod discover_external;
+mod new_fsm;
 mod simplify_with_control;
 mod synthesis_papercut;
 mod top_down_compile_control;
@@ -45,7 +46,6 @@ mod unroll_bound;
 mod well_formed;
 mod wire_inliner;
 mod wrap_main;
-mod new_fsm;
 
 pub use canonical::Canonicalize;
 pub use cell_share::CellShare;
