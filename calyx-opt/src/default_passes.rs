@@ -100,6 +100,7 @@ impl PassManager {
                 CompileRepeat,
                 DeadGroupRemoval, // Since previous passes potentially create dead groups
                 CollapseControl,
+                NewFSMs,
             ]
         );
         register_alias!(

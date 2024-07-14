@@ -34,7 +34,7 @@ impl Named for NewFSMs {
     }
 
     fn description() -> &'static str {
-        "Allocate new FSMs within a dynamic group"
+        "Change a sequential dynamic schedule to read from two smaller FSMs"
     }
 
     fn opts() -> Vec<PassOpt> {
@@ -116,9 +116,6 @@ impl Visitor for NewFSMs {
                     min_indx_opt,
                     min_diff_opt,
                 ) {
-                    (None, Some(..)) | (Some(..), None) => {
-                        unreachable!()
-                    }
                     (None, None) => {
                         (Some(curr_indx), Some(curr_diff), curr_indx + 1)
                     }
@@ -129,6 +126,7 @@ impl Visitor for NewFSMs {
                             (Some(min_indx), Some(min_diff), curr_indx + 1)
                         }
                     }
+                    _ => unreachable!(),
                 },
             );
 
