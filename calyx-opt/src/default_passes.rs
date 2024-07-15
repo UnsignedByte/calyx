@@ -29,7 +29,6 @@ impl PassManager {
         pm.register_pass::<CombProp>()?;
         pm.register_pass::<ComponentInliner>()?;
         pm.register_pass::<CollapseControl>()?;
-        pm.register_pass::<NewFSMs>()?;
         pm.register_pass::<DeadAssignmentRemoval>()?;
         pm.register_pass::<DeadCellRemoval>()?;
         pm.register_pass::<DeadGroupRemoval>()?;
@@ -40,6 +39,7 @@ impl PassManager {
         pm.register_pass::<StaticPromotion>()?;
         pm.register_pass::<SimplifyStaticGuards>()?;
         pm.register_pass::<DataPathInfer>()?;
+        pm.register_pass::<NewFSMs>()?;
 
         // Compilation passes
         pm.register_pass::<StaticInliner>()?;
