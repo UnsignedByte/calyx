@@ -316,7 +316,7 @@ fud exec --from calyx --to jq \
          --through verilog \
          --through dat \
          -s calyx.exec './target/debug/calyx' \
-         -s calyx.flags '-x new-fsm:new-fsm-threshold=15' \
+         -s calyx.flags '-x new-fsm:new-fsm-threshold=0' \
          -s verilog.cycle_limit 500 \
          -s verilog.data {}.data \
          -s jq.expr ".memories" \
