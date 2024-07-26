@@ -3,6 +3,7 @@ use crate::traversal::{
 };
 use calyx_ir::{self as ir, LibrarySignatures};
 use calyx_utils::CalyxResult;
+use std::collections::HashMap;
 
 /// Places @new_fsm attributes at key locations during traversal of dynamic control
 /// For example, transforming the following:
@@ -26,6 +27,89 @@ const APPROX_WHILE_REPEAT_SIZE: u64 = 3;
 
 pub struct NewFSMs {
     threshold: u64,
+    num_children: u64,
+}
+
+impl NewFSMs {
+    fn compute_opts_aux(
+        lst: &Vec<u64>,
+        map: &mut HashMap<(u64, u64), (u64, Option<u64>)>,
+        avg: u64,
+        (t, l): (u64, u64),
+    ) -> u64 {
+        let opt = (l..=t)
+            .map(|i| {
+                let sub_query = (i - 1, l - 1);
+                let t_next_usize: usize = sub_query.0.try_into().unwrap();
+                let subprob_opt = match (map.get(&sub_query), l == 1, i == l) {
+                    (Some((v, _)), ..) => *v,
+                    (None, true, _) => {
+                        avg.abs_diff(lst[0..=t_next_usize].iter().sum())
+                    }
+                    (None, _, true) => lst[0..=t_next_usize]
+                        .iter()
+                        .map(|v| avg.abs_diff(*v))
+                        .sum(),
+                    (None, false, false) => {
+                        Self::compute_opts_aux(lst, map, avg, sub_query)
+                    }
+                };
+                let curr_addition = avg.abs_diff(
+                    lst[i.try_into().unwrap()..=t.try_into().unwrap()]
+                        .iter()
+                        .sum(),
+                );
+                map.insert((i - 1, l - 1), (subprob_opt, Some(curr_addition)));
+                subprob_opt + curr_addition
+            })
+            .min_by(u64::cmp)
+            .expect("seq block has no statments");
+        map.insert((t, l), (opt, None));
+        opt
+    }
+
+    fn backtrack(
+        map: &HashMap<(u64, u64), (u64, Option<u64>)>,
+        (mut t, mut l): (u64, u64),
+    ) {
+        let mut splits: Vec<u64> = Vec::new();
+        while l > 0 {
+            let ((opt, _), mut split) = (map.get(&(t, l)).unwrap(), 0);
+            for i in (l..=t) {}
+        }
+    }
+
+    fn compute_opts(
+        lst: &Vec<u64>,
+        num_splits: u64,
+    ) -> (u64, HashMap<(u64, u64), u64>) {
+        let spots_to_split: u64 = lst.len().try_into().unwrap();
+        let mut opt_values: HashMap<(u64, u64), u64> = HashMap::new();
+
+        for k in 0..(num_splits + 1) {
+            for t in 0..(spots_to_split + 1) {
+                // check if base cases have been memoized
+                // if let None = opt_values.get(&(t,k)) &
+                if k == t || k == 0 {
+                    match opt_values.get(&(t, k)) {
+                        // compute base cases
+                        None => match k {
+                            0 => {}
+                            _ => {}
+                        },
+                        Some(opt) => (),
+                    }
+                } else {
+                    let find_min: Vec<u64> = Vec::new();
+                    match opt_values.get(&(t, k)) {
+                        None => (),
+                        Some(opt) => (),
+                    }
+                }
+            }
+        }
+        (1, HashMap::new())
+    }
 }
 
 impl Named for NewFSMs {
@@ -44,6 +128,12 @@ impl Named for NewFSMs {
                 "Seq blocks with a size larger than this threshold get split into two different FSMs",
                 ParseVal::Num(i64::MAX),
                 PassOpt::parse_num,
+            ),
+            PassOpt::new(
+                "num-children", 
+                "Number of children to seq's to split parent seq. into", 
+                ParseVal::Num(0),
+                PassOpt::parse_num
             )
         ]
     }
@@ -59,6 +149,9 @@ impl ConstructVisitor for NewFSMs {
             threshold: opts[&"new-fsm-threshold"]
                 .pos_num()
                 .expect("requires non-negative threshold parameter"),
+            num_children: opts[&"num-children"]
+                .pos_num()
+                .expect("requires non-negative num. children parameter"),
         })
     }
     fn clear_data(&mut self) {
@@ -87,7 +180,7 @@ impl Visitor for NewFSMs {
         let mut total_size: u64 = 0;
 
         for stmt in s.stmts.iter() {
-            let approx_stmt_size = ir::Control::approx_size(
+            let approx_stmt_size: u64 = ir::Control::approx_size(
                 stmt,
                 APPROX_ENABLE_SIZE,
                 APPROX_WHILE_REPEAT_SIZE,
