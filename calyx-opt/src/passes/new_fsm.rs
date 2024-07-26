@@ -3,7 +3,7 @@ use crate::traversal::{
 };
 use calyx_ir::{self as ir, LibrarySignatures};
 use calyx_utils::CalyxResult;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Places @new_fsm attributes at key locations during traversal of dynamic control
 /// For example, transforming the following:
@@ -31,84 +31,108 @@ pub struct NewFSMs {
 }
 
 impl NewFSMs {
-    fn compute_opts_aux(
+    /// Helper function for the dynamic programming problem.
+    /// Taking the left-hand `t+1` elements of a list,
+    /// this function fills a map from the tuple (`t`: # of spots to split , `l`: # splitters left) to
+    /// the minimum possible cost of splitting these numbers `l` times.
+    fn compute_opts(
         lst: &Vec<u64>,
-        map: &mut HashMap<(u64, u64), (u64, Option<u64>)>,
+        map: &mut HashMap<(u64, u64), u64>,
         avg: u64,
         (t, l): (u64, u64),
     ) -> u64 {
         let opt = (l..=t)
             .map(|i| {
-                let sub_query = (i - 1, l - 1);
-                let t_next_usize: usize = sub_query.0.try_into().unwrap();
-                let subprob_opt = match (map.get(&sub_query), l == 1, i == l) {
-                    (Some((v, _)), ..) => *v,
-                    (None, true, _) => {
-                        avg.abs_diff(lst[0..=t_next_usize].iter().sum())
-                    }
-                    (None, _, true) => lst[0..=t_next_usize]
-                        .iter()
-                        .map(|v| avg.abs_diff(*v))
-                        .sum(),
-                    (None, false, false) => {
-                        Self::compute_opts_aux(lst, map, avg, sub_query)
-                    }
+                let (sub_query, t_next_usize) =
+                    ((i - 1, l - 1), (i - 1).try_into().unwrap());
+                let (memoized, subprob_opt) = match map.get(&sub_query) {
+                    // if memoized, use cached val. instead of recomputing
+                    Some(v) => (true, *v),
+                    None => match (l == 1, i == l) {
+                        (true, _) => (
+                            // base case where sub_query :- (_, 0)
+                            false,
+                            avg.abs_diff(lst[0..=t_next_usize].iter().sum()),
+                        ),
+                        (_, true) => (
+                            // base case where sub_query :- (n, n)
+                            false,
+                            lst[0..=t_next_usize]
+                                .iter()
+                                .map(|v| avg.abs_diff(*v))
+                                .sum(),
+                        ),
+                        (false, false) => (
+                            // inductive case; break into smaller sub-problems
+                            false,
+                            Self::compute_opts(lst, map, avg, sub_query),
+                        ),
+                    },
                 };
-                let curr_addition = avg.abs_diff(
-                    lst[i.try_into().unwrap()..=t.try_into().unwrap()]
-                        .iter()
-                        .sum(),
-                );
-                map.insert((i - 1, l - 1), (subprob_opt, Some(curr_addition)));
-                subprob_opt + curr_addition
+                // save insert time if alr. memoized
+                if !memoized {
+                    map.insert((i - 1, l - 1), subprob_opt);
+                }
+                // return sub-prob opt. value + cost of putting splitter at ith slot
+                subprob_opt
+                    + avg.abs_diff(
+                        lst[i.try_into().unwrap()..=t.try_into().unwrap()]
+                            .iter()
+                            .sum(),
+                    )
             })
             .min_by(u64::cmp)
             .expect("seq block has no statments");
-        map.insert((t, l), (opt, None));
+        map.insert((t, l), opt);
         opt
     }
 
+    /// Helper function for the dynamic programming problem. Given a filled map
+    /// from values (`t`: # of spots to split , `l`: # splitters left) to minimum costs,
+    /// finds a backward path of indices to optimally split the list and fills these
+    /// indices into a list `splits`.
     fn backtrack(
-        map: &HashMap<(u64, u64), (u64, Option<u64>)>,
-        (mut t, mut l): (u64, u64),
-    ) {
-        let mut splits: Vec<u64> = Vec::new();
-        while l > 0 {
-            let ((opt, _), mut split) = (map.get(&(t, l)).unwrap(), 0);
-            for i in (l..=t) {}
-        }
-    }
-
-    fn compute_opts(
+        map: &HashMap<(u64, u64), u64>,
         lst: &Vec<u64>,
-        num_splits: u64,
-    ) -> (u64, HashMap<(u64, u64), u64>) {
-        let spots_to_split: u64 = lst.len().try_into().unwrap();
-        let mut opt_values: HashMap<(u64, u64), u64> = HashMap::new();
-
-        for k in 0..(num_splits + 1) {
-            for t in 0..(spots_to_split + 1) {
-                // check if base cases have been memoized
-                // if let None = opt_values.get(&(t,k)) &
-                if k == t || k == 0 {
-                    match opt_values.get(&(t, k)) {
-                        // compute base cases
-                        None => match k {
-                            0 => {}
-                            _ => {}
-                        },
-                        Some(opt) => (),
-                    }
-                } else {
-                    let find_min: Vec<u64> = Vec::new();
-                    match opt_values.get(&(t, k)) {
-                        None => (),
-                        Some(opt) => (),
-                    }
+        splits: &mut VecDeque<u64>,
+        avg: u64,
+        (t, l): (u64, u64),
+    ) {
+        let opt = map.get(&(t, l)).unwrap();
+        for i in l..=t {
+            let sp_opt = map.get(&(i - 1, l - 1)).unwrap();
+            if *opt
+                == sp_opt
+                    + avg.abs_diff(
+                        lst[i.try_into().unwrap()..=t.try_into().unwrap()]
+                            .iter()
+                            .sum(),
+                    )
+            {
+                splits.push_front(i - 1);
+                if l > 1 {
+                    Self::backtrack(map, lst, splits, avg, (i - 1, l - 1));
                 }
+                break;
             }
         }
-        (1, HashMap::new())
+    }
+    /// This function solves the problem:
+    /// Given a number of groups to create `k` and a list of `n` integers `lst`,
+    /// how do we optimally partition the list such that:
+    ///
+    /// 1. All groups are non-empty
+    /// 2. All formed groups are contiguous w.r.t. original ordering in `lst`
+    /// 3. The sum of the elements in each group are as close as possible to the
+    ///    sum of all `n` elements in `lst` divided by the number of groups `k`
+    fn compute_split_indices(lst: &Vec<u64>, num_groups: u64) -> Vec<u64> {
+        let (mut map, mut splits) = (HashMap::new(), VecDeque::new());
+        let (sum, len): (u64, u64) =
+            (lst.iter().sum(), lst.len().try_into().unwrap());
+        let (query, avg) = ((len - 1, num_groups - 1), sum / num_groups);
+        Self::compute_opts(lst, &mut map, avg, query);
+        Self::backtrack(&map, lst, &mut splits, avg, query);
+        Vec::<u64>::from(splits)
     }
 }
 
