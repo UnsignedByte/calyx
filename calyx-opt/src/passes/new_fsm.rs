@@ -205,9 +205,11 @@ impl Visitor for NewFSMs {
             .collect();
 
         // Exit out if threshold for splitting exceeds the estimated total size
-        // or if we want more children seq's than we have statements
-        let total_size = stmt_sizes.iter().sum();
-        if total_size < self.threshold || self.num_children > total_size {
+        // if we want more children seq's than we have statements, or if there is only one child
+        if stmt_sizes.iter().sum::<u64>() < self.threshold
+            || self.num_children > s.stmts.len().try_into().unwrap()
+            || self.num_children == 1
+        {
             return Ok(Action::Continue);
         }
 
