@@ -31,62 +31,39 @@ pub struct NewFSMs {
 }
 
 impl NewFSMs {
-    /// Helper function for the dynamic programming problem.
-    /// Taking the left-hand `t+1` elements of a list,
-    /// this function fills a map from the tuple (`t`: # of spots to split , `l`: # splitters left) to
-    /// the minimum possible cost of splitting these numbers `l` times.
+    /// Helper function for the dynamic programming problem. Taking the left-hand
+    /// `t+1` elements of a list, this function fills a map from the tuple
+    /// (`t`: # of spots to split ,`l`: # splitters left) to the minimum
+    /// possible cost of splitting these numbers `l` times.
     fn compute_opts(
         lst: &Vec<u64>,
         map: &mut HashMap<(u64, u64), u64>,
         avg: u64,
-        (t, l): (u64, u64),
+        (num_spots, num_splitters): (u64, u64),
     ) -> u64 {
-        let opt = (l..=t)
-            .map(|i| {
-                let (sub_query, t_next_usize) =
-                    ((i - 1, l - 1), (i - 1).try_into().unwrap());
-                let (memoized, subprob_opt) = match map.get(&sub_query) {
-                    // if possible, use cached val. instead of recomputing
-                    Some(v) => (true, *v),
-                    None => match (l == 1, i == l) {
-                        (true, _) => (
-                            // base case where sub_query :- (_, 0)
-                            false,
-                            avg.abs_diff(lst[0..=t_next_usize].iter().sum()),
-                        ),
-                        (_, true) => (
-                            // base case where sub_query :- (n, n)
-                            false,
-                            lst[0..=t_next_usize]
-                                .iter()
-                                .map(|v| avg.abs_diff(*v))
-                                .sum(),
-                        ),
-                        (false, false) => (
-                            // inductive case; break into smaller sub-problems
-                            false,
-                            Self::compute_opts(lst, map, avg, sub_query),
-                        ),
-                    },
+        match map.get(&(num_spots, num_splitters)) {
+            Some(v) => *v,
+            None => {
+                let spots = num_spots.try_into().unwrap();
+                let opt_value = match (num_spots, num_splitters) {
+                    (_, 0) => avg.abs_diff(lst[0..=spots].iter().sum()),
+                    (t, l) => (l..=t)
+                        .map(|i| {
+                            Self::compute_opts(lst, map, avg, (i - 1, l - 1))
+                                + avg.abs_diff(
+                                    lst[i.try_into().unwrap()..=spots]
+                                        .iter()
+                                        .sum(),
+                                )
+                        })
+                        .min_by(u64::cmp)
+                        .expect("seq block has no statments"),
                 };
-                // save insert time if alr. memoized
-                if !memoized {
-                    map.insert((i - 1, l - 1), subprob_opt);
-                }
-                // return sub-prob opt. value + cost of putting splitter at ith slot
-                subprob_opt
-                    + avg.abs_diff(
-                        lst[i.try_into().unwrap()..=t.try_into().unwrap()]
-                            .iter()
-                            .sum(),
-                    )
-            })
-            .min_by(u64::cmp)
-            .expect("seq block has no statments");
-        map.insert((t, l), opt);
-        opt
+                map.insert((num_spots, num_splitters), opt_value);
+                opt_value
+            }
+        }
     }
-
     /// Helper function for the dynamic programming problem. Given a filled map
     /// from values (`t`: # of spots to split , `l`: # splitters left) to minimum costs,
     /// finds a backward path of indices to optimally split the list and fills these
@@ -131,13 +108,22 @@ impl NewFSMs {
         lst: &Vec<u64>,
         num_groups: u64,
     ) -> Vec<(u64, u64)> {
-        let (mut map, mut splits) = (HashMap::new(), VecDeque::new());
-        let (avg, len) = (
-            lst.iter().sum::<u64>() / num_groups,
-            TryInto::<u64>::try_into(lst.len()).unwrap(),
-        );
+        // compute constants
+        let avg = lst.iter().sum::<u64>() / num_groups;
+        let len: u64 = lst.len().try_into().unwrap();
+
+        // map of optimal values
+        let mut map = HashMap::new();
+
+        // contains indices at which to split
+        let mut splits = VecDeque::new();
+        splits.push_front(len - 1);
+
+        // solve dp problem
         Self::compute_opts(lst, &mut map, avg, (len - 1, num_groups - 1));
         Self::backtrack(&map, lst, &mut splits, avg, (len - 1, num_groups - 1));
+
+        // compute range of groups from split indices
         let mut prev_index = 0;
         splits
             .iter()
@@ -219,20 +205,24 @@ impl Visitor for NewFSMs {
             .collect();
 
         // Exit out if threshold for splitting exceeds the estimated total size
-        if stmt_sizes.iter().sum::<u64>() < self.threshold {
+        // or if we want more children seq's than we have statements
+        let total_size = stmt_sizes.iter().sum();
+        if total_size < self.threshold || self.num_children > total_size {
             return Ok(Action::Continue);
         }
 
         // Split the `seq` block into children `seq`s controlled by a parent
         let parent_seq = ir::Control::Seq(ir::Seq {
             stmts: Self::compute_split_indices(&stmt_sizes, self.num_children)
-                .drain(..)
-                .map(|(lb, ub)| {
-                    let r = ((ub - lb) + 1).try_into().unwrap();
+                .iter()
+                .map(|(l, u)| {
                     let mut child_attrs = s.attributes.clone();
                     child_attrs.insert(ir::BoolAttr::NewFSM, 1);
                     ir::Control::Seq(ir::Seq {
-                        stmts: s.stmts.drain(0..r).collect(),
+                        stmts: s
+                            .stmts
+                            .drain(0..=(u - l).try_into().unwrap())
+                            .collect(),
                         attributes: child_attrs,
                     })
                 })
