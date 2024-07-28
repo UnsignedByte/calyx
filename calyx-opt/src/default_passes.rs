@@ -84,6 +84,7 @@ impl PassManager {
             [
                 DataPathInfer,
                 CollapseControl, // Run it twice: once at beginning of pre-opt, once at end.
+                NewFSMs,
                 CompileSyncWithoutSyncReg,
                 GroupToSeq,
                 DeadAssignmentRemoval,
@@ -100,7 +101,6 @@ impl PassManager {
                 CompileRepeat,
                 DeadGroupRemoval, // Since previous passes potentially create dead groups
                 CollapseControl,
-                NewFSMs,
             ]
         );
         register_alias!(

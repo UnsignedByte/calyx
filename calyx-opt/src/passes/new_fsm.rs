@@ -120,8 +120,9 @@ impl NewFSMs {
         splits.push_front(len - 1);
 
         // solve dp problem
-        Self::compute_opts(lst, &mut map, avg, (len - 1, num_groups - 1));
-        Self::backtrack(&map, lst, &mut splits, avg, (len - 1, num_groups - 1));
+        let opt_query = (len - 1, num_groups - 1);
+        Self::compute_opts(lst, &mut map, avg, opt_query);
+        Self::backtrack(&map, lst, &mut splits, avg, opt_query);
 
         // compute range of groups from split indices
         let mut prev_index = 0;
