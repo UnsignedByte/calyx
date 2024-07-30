@@ -19,7 +19,6 @@ use std::rc::Rc;
 
 const NODE_ID: ir::Attribute =
     ir::Attribute::Internal(ir::InternalAttr::NODE_ID);
-const DUPLICATE_NUM_REG: u64 = 2;
 
 /// Computes the exit edges of a given [ir::Control] program.
 ///
@@ -231,12 +230,11 @@ fn register_to_query(
 ) -> usize {
     match distribute {
         true => {
-            // num_states+1 is needed to prevent error (the done condition needs
-            // to check past the number of states, i.e., will check fsm == 3 when
-            // num_states == 3).
-            (state * num_registers / (num_states + 1))
-                .try_into()
-                .unwrap()
+            // num_states (not num_states + 1) is sufficient to prevent error
+            // (the done condition needs to check past the number of states,
+            // i.e., will check fsm == 3 when num_states == 3 and
+            // fsm_rep.last_state == 3 is passed in for num_states)
+            (state * num_registers / num_states).try_into().unwrap()
         }
         false => 0,
     }
@@ -253,17 +251,17 @@ enum RegisterSpread {
     Single,
     // Duplicate the register to reduce fanout when querying
     // (all FSMs in this vec still have all of the states)
-    Duplicate,
+    Duplicate(u64, bool),
 }
 
 #[derive(Clone, Copy)]
 /// A type that represents how the FSM should be implemented in hardware.
 struct FSMRepresentation {
-    // the representation of a state within a register (one-hot, binary, etc.)
+    /// the representation of a state within a register (one-hot, binary, etc.)
     encoding: RegisterEncoding,
-    // the number of registers representing the dynamic finite state machine
+    /// the number of registers representing the dynamic finite state machine
     spread: RegisterSpread,
-    // the index of the last state in the fsm (total # states = last_state + 1)
+    /// the index of the last state in the fsm (total # states = last_state + 1)
     last_state: u64,
 }
 
@@ -495,12 +493,14 @@ impl<'b, 'a> Schedule<'b, 'a> {
             (RegisterEncoding::OneHot, RegisterSpread::Single) => {
                 add_fsm_regs("init_one_reg", 1)
             }
-            (RegisterEncoding::Binary, RegisterSpread::Duplicate) => {
-                add_fsm_regs("std_reg", DUPLICATE_NUM_REG)
-            }
-            (RegisterEncoding::OneHot, RegisterSpread::Duplicate) => {
-                add_fsm_regs("init_one_reg", DUPLICATE_NUM_REG)
-            }
+            (
+                RegisterEncoding::Binary,
+                RegisterSpread::Duplicate(num_regs, _),
+            ) => add_fsm_regs("std_reg", num_regs),
+            (
+                RegisterEncoding::OneHot,
+                RegisterSpread::Duplicate(num_regs, _),
+            ) => add_fsm_regs("init_one_reg", num_regs),
         };
 
         (fsms, first_state, fsm_size)
@@ -592,7 +592,10 @@ impl<'b, 'a> Schedule<'b, 'a> {
                     (&fsms, &signal_on),
                     &s,
                     &fsm_size,
-                    false, // by default do not distribute transition queries across regs; choose first
+                    match fsm_rep.spread {
+                        RegisterSpread::Single => false,
+                        RegisterSpread::Duplicate(_, b) => b,
+                    }, // by default do not distribute transition queries across regs; choose first
                 );
 
                 // add transitions for every fsm register to ensure consistency between each
@@ -605,12 +608,11 @@ impl<'b, 'a> Schedule<'b, 'a> {
                                 self.builder.add_constant(e, fsm_size)
                             }
                             RegisterEncoding::OneHot => {
+                                let u32_end = e
+                                    .try_into()
+                                    .expect("failed to convert to u32");
                                 self.builder.add_constant(
-                                    u64::pow(
-                                        2,
-                                        e.try_into()
-                                            .expect("failed to convert to u32"),
-                                    ),
+                                    u64::pow(2, u32_end),
                                     fsm_size,
                                 )
                             }
@@ -1101,6 +1103,10 @@ pub struct TopDownCompileControl {
     one_hot_cutoff: u64,
     /// Number of states the dynamic FSM must have before picking duplicate over single register
     duplicate_cutoff: u64,
+    /// If duplicate is chosen, number of regsiters to spread queries over
+    duplicate_num_reg: u64,
+    /// Spreads transition queries across duplicated registers iff var. holds true
+    spread_transitions: bool,
 }
 
 impl TopDownCompileControl {
@@ -1117,15 +1123,26 @@ impl TopDownCompileControl {
                 match (
                     attrs.has(BoolAttr::OneHot),
                     last_state <= self.one_hot_cutoff,
+                    last_state >= 64,
                 ) {
-                    (true, _) | (false, true) => RegisterEncoding::OneHot,
-                    (false, false) => RegisterEncoding::Binary,
+                    // don't ohe if unsafe or num states exceeds cutoff
+                    (_, _, true) | (false, false, false) => {
+                        RegisterEncoding::Binary
+                    }
+                    // ohe if is safe and (explicitly stated via attr. or cutoff exceeds num states)
+                    _ => RegisterEncoding::OneHot,
                 }
             },
             spread: {
-                match (last_state + 1) <= self.duplicate_cutoff {
-                    true => RegisterSpread::Single,
-                    false => RegisterSpread::Duplicate,
+                match (
+                    attrs.has(BoolAttr::Duplicate),
+                    last_state <= self.duplicate_cutoff,
+                ) {
+                    (false, true) => RegisterSpread::Single,
+                    _ => RegisterSpread::Duplicate(
+                        self.duplicate_num_reg,
+                        self.spread_transitions,
+                    ),
                 }
             },
             last_state,
@@ -1151,6 +1168,10 @@ impl ConstructVisitor for TopDownCompileControl {
             duplicate_cutoff: opts[&"duplicate-cutoff"]
                 .pos_num()
                 .expect("requires non-negative duplicate cutoff parameter"),
+            duplicate_num_reg: opts[&"duplicate-num-reg"]
+                .pos_num()
+                .expect("requires non-negative number of duplicate registers"),
+            spread_transitions: opts[&"spread-transitions"].bool(),
         })
     }
 
@@ -1199,6 +1220,18 @@ impl Named for TopDownCompileControl {
                 "Threshold above which the dynamic fsm register is replicated into a second, identical register",
                 ParseVal::Num(i64::MAX),
                 PassOpt::parse_num,
+            ),
+            PassOpt::new(
+                "duplicate-num-reg",
+                "Number of registers over which to spread queries, if duplicate is chosen",
+                ParseVal::Num(2), // default to original + one copy
+                PassOpt::parse_num
+            ),
+            PassOpt::new(
+                "spread-transitions", 
+                "Determines if transition queries are spread across duplicated registers", 
+                ParseVal::Bool(false), 
+                PassOpt::parse_bool
             ),
         ]
     }
@@ -1253,7 +1286,7 @@ impl Visitor for TopDownCompileControl {
         _comps: &[ir::Component],
     ) -> VisResult {
         // only compile using new fsm if has new_fsm attribute
-        if !s.attributes.has(ir::BoolAttr::NewFSM) {
+        if !(s.attributes.has(ir::BoolAttr::NewFSM)) {
             return Ok(Action::Continue);
         }
         let mut builder = ir::Builder::new(comp, sigs);

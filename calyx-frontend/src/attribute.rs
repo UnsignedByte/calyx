@@ -43,6 +43,9 @@ pub enum BoolAttr {
     #[strum(serialize = "data")]
     /// This is a data path instance
     Data,
+    #[strum(serialize = "duplicate")]
+    /// Duplicate an FSM
+    Duplicate,
     #[strum(serialize = "control")]
     /// This is a control path instance
     Control,

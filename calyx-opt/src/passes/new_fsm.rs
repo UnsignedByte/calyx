@@ -28,6 +28,7 @@ const APPROX_WHILE_REPEAT_SIZE: u64 = 3;
 pub struct NewFSMs {
     threshold: u64,
     num_children: u64,
+    duplicate_parent: bool,
 }
 
 impl NewFSMs {
@@ -159,6 +160,12 @@ impl Named for NewFSMs {
                 "Number of children to seq's to split parent seq. into", 
                 ParseVal::Num(0),
                 PassOpt::parse_num
+            ),
+            PassOpt::new(
+                "duplicate-parent",
+                "Duplicates the parent register if var == true",
+                ParseVal::Bool(false),
+                PassOpt::parse_bool
             )
         ]
     }
@@ -177,6 +184,7 @@ impl ConstructVisitor for NewFSMs {
             num_children: opts[&"num-children"]
                 .pos_num()
                 .expect("requires non-negative num. children parameter"),
+            duplicate_parent: opts[&"duplicate-parent"].bool(),
         })
     }
     fn clear_data(&mut self) {
@@ -230,7 +238,14 @@ impl Visitor for NewFSMs {
                     })
                 })
                 .collect(),
-            attributes: s.attributes.clone(),
+            attributes: {
+                let mut parent_attrs = s.attributes.clone();
+                parent_attrs.insert(ir::BoolAttr::NewFSM, 1);
+                if self.duplicate_parent {
+                    parent_attrs.insert(ir::BoolAttr::Duplicate, 1);
+                }
+                parent_attrs
+            },
         });
         Ok(Action::change(parent_seq))
     }
