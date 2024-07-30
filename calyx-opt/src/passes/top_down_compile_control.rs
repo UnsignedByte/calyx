@@ -1228,9 +1228,9 @@ impl Named for TopDownCompileControl {
                 PassOpt::parse_num
             ),
             PassOpt::new(
-                "spread-transitions", 
+                "spread-transitions",
                 "Determines if transition queries are spread across duplicated registers", 
-                ParseVal::Bool(false), 
+                ParseVal::Bool(false),
                 PassOpt::parse_bool
             ),
         ]
