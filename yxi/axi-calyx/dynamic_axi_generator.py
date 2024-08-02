@@ -654,6 +654,7 @@ def add_wrapper_comp(prog, mems):
         (f"{prefix}ARADDR", 16),
         # ("ARPROT", 3), #We don't do anything with this
         (f"{prefix}RVALID", 1),
+        (f"ap_rst_n", 1),
     ]
 
     wrapper_outputs = [
@@ -701,7 +702,6 @@ def add_wrapper_comp(prog, mems):
         mem_name = mem[name_key]
         # Inputs/Outputs
         wrapper_inputs = [
-            (f"{mem_name}_ARESETn", 1),
             (f"{mem_name}_ARREADY", 1),
             (f"{mem_name}_RVALID", 1),
             (f"{mem_name}_RLAST", 1),
@@ -759,7 +759,7 @@ def add_wrapper_comp(prog, mems):
             # Connect wrapper ports with axi_dyn_mem ports
 
             # Read controller portion inputs
-            axi_mem["ARESETn"] = wrapper_comp.this()[f"{mem_name}_ARESETn"] #note that both styles work
+            axi_mem["ARESETn"] = wrapper_comp.this()[f"ap_rst_n"] #note that both styles work
             # wrapper_comp.this()[f"{mem_name}_ARESETn"] = axi_mem["ARESETn"] #note that both styles work
             axi_mem.ARREADY = wrapper_comp.this()[f"{mem_name}_ARREADY"]
             axi_mem.RVALID = wrapper_comp.this()[f"{mem_name}_RVALID"]
@@ -806,7 +806,7 @@ def add_wrapper_comp(prog, mems):
     )
     control_subordinate_invoke = invoke(
         control_subordinate,
-        # in_ARESETn=wrapper_comp.this()[f"ARESETn"],
+        in_ARESETn=wrapper_comp.this()[f"ap_rst_n"],
         in_AWVALID = wrapper_comp.this()[f"s_axi_control_AWVALID"],
         in_AWADDR = wrapper_comp.this()[f"s_axi_control_AWADDR"],
         in_WVALID = wrapper_comp.this()[f"s_axi_control_WVALID"],
