@@ -866,7 +866,7 @@ def build():
     return prog.program
 
 
-def check_mems_welformed(mems):
+def check_mems_wellformed(mems):
     """Checks if memories from yxi are well formed. Returns true if they are, false otherwise."""
     for mem in mems:
         assert (
