@@ -647,7 +647,7 @@ def add_wrapper_comp(prog, mems):
         (f"{prefix}WVALID", 1),
         # Want to use 32 bits because the registers in XRT are asusemd to be this size
         (f"{prefix}WDATA", 32),
-        # We don't use this but it is required by some versions of the spec. We should tie high on subordinate.
+        # We don't use WSTRB but it is required by some versions of the spec. We should tie high on subordinate.
         (f"{prefix}WSTRB", int(32 / 8)),
         (f"{prefix}BREADY", 1),
         (f"{prefix}ARVALID", 1),
@@ -655,6 +655,7 @@ def add_wrapper_comp(prog, mems):
         # ("ARPROT", 3), #We don't do anything with this
         (f"{prefix}RVALID", 1),
         (f"ap_rst_n", 1),
+        (f"ap_clk", 1, ["clk"])
     ]
 
     wrapper_outputs = [
