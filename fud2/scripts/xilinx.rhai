@@ -1,4 +1,3 @@
-// import "calyx" as c;
 import "axi" as axi;
 import "rtl_sim" as sim;
 import "testbench" as tb;
@@ -125,11 +124,12 @@ fn xrt_setup(e) {
     e.rule("emconfig", "$vitis-dir/bin/emconfigutil --platform $platform");
     e.build_cmd(["emconfig.json"], "emconfig", [], []);
 
+    let calyx_wrapper = if e.config_constrained_or("calyx-wrapper", ["true", "false"], "false") {""} else {"--calyx-wrapper"};
     // Execute via the `xclrun` tool.
     e.config_var("xrt-dir", "xilinx.xrt");
     e.rule(
         "xclrun",
-        "bash -c 'source $vitis-dir/settings64.sh ; source $xrt-dir/setup.sh ; XRT_INI_PATH=$xrt_ini EMCONFIG_PATH=. XCL_EMULATION_MODE=$xilinx-mode $python -m fud.xclrun --out $out $in'"
+        `bash -c 'source $vitis-dir/settings64.sh ; source $xrt-dir/setup.sh ; XRT_INI_PATH=$xrt_ini EMCONFIG_PATH=. XCL_EMULATION_MODE=$xilinx-mode $python -m fud.xclrun ${calyx_wrapper} --out $out $in'`
     );
     e.arg("pool", "console");
 
