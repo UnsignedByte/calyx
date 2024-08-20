@@ -624,7 +624,7 @@ def add_wrapper_comp(prog, mems):
         add_write_controller(prog, mem)
         add_axi_dyn_mem(prog, mem)
     
-    wrapper_comp = prog.component("wrapper")
+    wrapper_comp = prog.component("Toplevel")
     wrapper_comp.attribute("toplevel", 1)
     # Get handles to be used later
 
