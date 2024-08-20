@@ -126,7 +126,7 @@ class ComponentBuilder:
     def output(
         self, name: str, size: int, attribute_literals: List[RawPortAttr] = []
     ) -> ExprBuilder:
-        """Declare an output port on the component.
+        """Declare an output port on the component, with optional attributes.
 
         Returns an expression builder for the port.
         """
