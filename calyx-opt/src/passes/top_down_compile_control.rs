@@ -242,6 +242,23 @@ fn register_to_query(
     }
 }
 
+fn display_case_stmt_fsm_rep(
+    _transitions: Vec<(u64, u64, ir::Guard<Nothing>)>,
+    fsms: &Vec<RRC<Cell>>,
+) {
+    let out = &mut std::io::stdout();
+    let fsm_name = fsms.first().unwrap().borrow().name().id;
+
+    // print out fsm name
+    writeln!(out, "========= {} =========", fsm_name).unwrap();
+
+    // create case statement string
+    let mut always_comb: String = "always @ (*) begin\n".to_owned();
+    let begin_case = format!("    case ({}_out)\n", fsm_name);
+    always_comb.push_str(&begin_case);
+    writeln!(out, "{}", always_comb).unwrap();
+}
+
 #[derive(Clone, Copy)]
 enum RegisterEncoding {
     Binary,
@@ -529,7 +546,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
 
         // build necessary primitives dependent on encoding and spread
         let signal_on = self.builder.add_constant(1, 1);
-        let (fsms, first_state, fsm_size) =
+        let (fsms, _first_state, fsm_size) =
             Self::build_fsm_infrastructure(self.builder, &fsm_rep);
 
         // get first fsm register
@@ -579,12 +596,11 @@ impl<'b, 'a> Schedule<'b, 'a> {
                 }),
         );
 
-        // transition assignments
-        // the following updates are meant to ensure agreement between the two
-        // fsm registers; hence, all registers must be updated if `duplicate` is chosen
-        group.borrow_mut().assignments.extend(
-            self.transitions.into_iter().flat_map(|(s, e, guard)| {
-                // get a transition guard for the first fsm register, and apply it to every fsm register
+        // collect transition assignments for case statement generation
+        let mut trans_guards = self
+            .transitions
+            .iter()
+            .map(|(s, e, guard)| {
                 let state_guard = Self::query_state(
                     self.builder,
                     &mut used_slicers_vec,
@@ -594,44 +610,9 @@ impl<'b, 'a> Schedule<'b, 'a> {
                     &fsm_size,
                     false, // by default do not distribute transition queries across regs; choose first
                 );
-
-                // add transitions for every fsm register to ensure consistency between each
-                fsms.iter()
-                    .flat_map(|fsm| {
-                        let trans_guard =
-                            state_guard.clone().and(guard.clone());
-                        let end_const = match fsm_rep.encoding {
-                            RegisterEncoding::Binary => {
-                                self.builder.add_constant(e, fsm_size)
-                            }
-                            RegisterEncoding::OneHot => {
-                                self.builder.add_constant(
-                                    u64::pow(
-                                        2,
-                                        e.try_into()
-                                            .expect("failed to convert to u32"),
-                                    ),
-                                    fsm_size,
-                                )
-                            }
-                        };
-                        let ec_borrow = end_const.borrow();
-                        vec![
-                            self.builder.build_assignment(
-                                fsm.borrow().get("in"),
-                                ec_borrow.get("out"),
-                                trans_guard.clone(),
-                            ),
-                            self.builder.build_assignment(
-                                fsm.borrow().get("write_en"),
-                                signal_on.borrow().get("out"),
-                                trans_guard,
-                            ),
-                        ]
-                    })
-                    .collect_vec()
-            }),
-        );
+                (*s, *e, state_guard.and(guard.clone()))
+            })
+            .collect_vec();
 
         // done condition for group
         // arbitrarily look at first fsm register, since all are identical
@@ -645,42 +626,26 @@ impl<'b, 'a> Schedule<'b, 'a> {
             false,
         );
 
+        let fst_state: u64 = match fsm_rep.encoding {
+            RegisterEncoding::Binary => 0,
+            RegisterEncoding::OneHot => 1,
+        };
+
+        trans_guards.push((
+            fsm_rep.last_state,
+            fst_state,
+            first_fsm_last_guard.clone(),
+        ));
+
         let done_assign = self.builder.build_assignment(
             group.borrow().get("done"),
             signal_on.borrow().get("out"),
             first_fsm_last_guard.clone(),
         );
 
+        display_case_stmt_fsm_rep(trans_guards, &fsms);
+
         group.borrow_mut().assignments.push(done_assign);
-
-        // Cleanup: Add a transition from last state to the first state for each register
-        let reset_fsms = fsms
-            .iter()
-            .flat_map(|fsm| {
-                // by default, query first register
-                let fsm_last_guard = Self::query_state(
-                    self.builder,
-                    &mut used_slicers_vec,
-                    &fsm_rep,
-                    (&fsms, &signal_on),
-                    &fsm_rep.last_state,
-                    &fsm_size,
-                    false,
-                );
-                let reset_fsm = build_assignments!(self.builder;
-                    fsm["in"] = fsm_last_guard ? first_state["out"];
-                    fsm["write_en"] = fsm_last_guard ? signal_on["out"];
-                );
-                reset_fsm.to_vec()
-            })
-            .collect_vec();
-
-        // extend with conditions to set all fsms to initial state
-        self.builder
-            .component
-            .continuous_assignments
-            .extend(reset_fsms);
-
         group
     }
 }
