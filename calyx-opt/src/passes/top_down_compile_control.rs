@@ -243,19 +243,87 @@ fn register_to_query(
 }
 
 fn display_case_stmt_fsm_rep(
-    _transitions: Vec<(u64, u64, ir::Guard<Nothing>)>,
+    mut transitions: Vec<(u64, u64, ir::Guard<Nothing>)>,
     fsms: &Vec<RRC<Cell>>,
+    last_state: u64,
 ) {
     let out = &mut std::io::stdout();
     let fsm_name = fsms.first().unwrap().borrow().name().id;
+
+    // indenting function
+    let indent = |n| {
+        let mut spaces = "".to_string();
+        (1..=n).into_iter().for_each(|_| {
+            spaces.push_str(" ");
+        });
+        spaces
+    };
 
     // print out fsm name
     writeln!(out, "========= {} =========", fsm_name).unwrap();
 
     // create case statement string
-    let mut always_comb: String = "always @ (*) begin\n".to_owned();
-    let begin_case = format!("    case ({}_out)\n", fsm_name);
-    always_comb.push_str(&begin_case);
+    let mut always_comb: String = "always @ (*) begin\n".to_string();
+    always_comb.push_str(&format!("{}case ({}_out)\n", indent(4), fsm_name));
+
+    // ------------------------
+    // start enumerating cases
+    // ------------------------
+
+    // get every transition from the same state into the same bucket
+    let mut transition_sources: HashMap<
+        u64,
+        Vec<(u64, u64, ir::Guard<Nothing>)>,
+    > = HashMap::new();
+    transitions.drain(..).for_each(|(s, e, g)| {
+        match transition_sources.get_mut(&s) {
+            Some(v) => v.push((s, e, g)),
+            None => {
+                transition_sources.insert(s, vec![(s, e, g)]);
+            }
+        }
+    });
+
+    // create case statements
+    let bit_w = get_bit_width_from(last_state + 1);
+    let mut cases = "".to_string();
+    transition_sources
+        .drain()
+        .sorted_by(|(s1, ..), (s2, ..)| s1.cmp(s2))
+        .map(|(s, mut v)| {
+            let mut case = format!("{}{}'d{} : begin\n", indent(8), bit_w, s);
+            for (i, (_, e, g)) in v.drain(..).enumerate() {
+                let mut if_branch = format!(
+                    "{}{} ({}) begin\n",
+                    indent(12),
+                    match i == 0 {
+                        true => "if",
+                        false => "else if",
+                    }
+                    .to_string(),
+                    Printer::guard_str(&g)
+                );
+                if_branch.push_str(&format!(
+                    "{}{}_in = {}'d{};\n",
+                    indent(16),
+                    fsm_name,
+                    bit_w,
+                    e
+                ));
+                if_branch.push_str(&format!("{}end\n", indent(12)));
+                case.push_str(&if_branch);
+            }
+            case.push_str(&format!("{}end\n", indent(8)));
+            case
+        })
+        .for_each(|s| {
+            cases.push_str(&s);
+        });
+
+    always_comb.push_str(&cases);
+    always_comb.push_str(&format!("{}endcase\n", indent(4)));
+    always_comb.push_str(&"end\n".to_string());
+
     writeln!(out, "{}", always_comb).unwrap();
 }
 
@@ -643,7 +711,7 @@ impl<'b, 'a> Schedule<'b, 'a> {
             first_fsm_last_guard.clone(),
         );
 
-        display_case_stmt_fsm_rep(trans_guards, &fsms);
+        display_case_stmt_fsm_rep(trans_guards, &fsms, fsm_rep.last_state);
 
         group.borrow_mut().assignments.push(done_assign);
         group
