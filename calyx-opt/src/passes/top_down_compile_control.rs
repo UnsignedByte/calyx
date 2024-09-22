@@ -714,7 +714,14 @@ impl<'b, 'a> Schedule<'b, 'a> {
         );
         let x = self.builder.component.name;
 
-        display_case_stmt_fsm_rep(trans_guards, &fsms, fsm_rep.last_state, x);
+        if dump_fsm {
+            display_case_stmt_fsm_rep(
+                trans_guards,
+                &fsms,
+                fsm_rep.last_state,
+                x,
+            );
+        }
 
         group.borrow_mut().assignments.push(done_assign);
         group
