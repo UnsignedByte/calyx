@@ -246,6 +246,7 @@ fn display_case_stmt_fsm_rep(
     mut transitions: Vec<(u64, u64, ir::Guard<Nothing>)>,
     fsms: &Vec<RRC<Cell>>,
     last_state: u64,
+    comp_name: Id,
 ) {
     let out = &mut std::io::stdout();
     let fsm_name = fsms.first().unwrap().borrow().name().id;
@@ -260,7 +261,8 @@ fn display_case_stmt_fsm_rep(
     };
 
     // print out fsm name
-    writeln!(out, "========= {} =========", fsm_name).unwrap();
+    writeln!(out, "========= {} : {} =========", comp_name.id, fsm_name)
+        .unwrap();
 
     // create case statement string
     let mut always_comb: String = "always @ (*) begin\n".to_string();
@@ -710,8 +712,9 @@ impl<'b, 'a> Schedule<'b, 'a> {
             signal_on.borrow().get("out"),
             first_fsm_last_guard.clone(),
         );
+        let x = self.builder.component.name;
 
-        display_case_stmt_fsm_rep(trans_guards, &fsms, fsm_rep.last_state);
+        display_case_stmt_fsm_rep(trans_guards, &fsms, fsm_rep.last_state, x);
 
         group.borrow_mut().assignments.push(done_assign);
         group
@@ -1356,7 +1359,6 @@ impl Visitor for TopDownCompileControl {
         let mut sch = Schedule::from(&mut builder);
         sch.calculate_states_while(w, self.early_transitions)?;
         let fsm_impl = self.get_representation(&sch, &w.attributes);
-
         // Compile schedule and return the group.
         let if_group =
             sch.realize_schedule(self.dump_fsm, &mut self.fsm_groups, fsm_impl);
