@@ -44,13 +44,26 @@ def create_timeline_map(profiled_info, fsm_groups, all_groups):
                     group_to_gt_segments[group_name] = {} # segment start cycle to segment end cycle
                 group_to_gt_segments[group_name][segment["start"]] = segment["end"]
             for i in range(segment["start"], segment["end"]): # really janky, I wonder if there's a better way to do this?
+                component_name = group_info["component"]
+                # FIXME: mega gross. clean up later
                 if group_info["fsm_name"] is not None: # FSM version
-                    fsm_timeline_map[i][group_info["component"]] = group_name
+                    if component_name not in fsm_timeline_map[i]:
+                        fsm_timeline_map[i][component_name] = []    
+                    fsm_timeline_map[i][component_name].append(group_name)
                 elif group_name in only_gt_groups: # A group that isn't managed by an FSM. In which case it has to be in both FSM and GT
-                    fsm_timeline_map[i][group_info["component"]] = group_name
-                    timeline_map[i][group_info["component"]] = group_name
+                    if component_name not in fsm_timeline_map[i]:
+                        fsm_timeline_map[i][component_name] = []
+                    fsm_timeline_map[i][component_name].append(group_name)
+                    if component_name not in timeline_map[i]:
+                        timeline_map[i][component_name] = []
+                    timeline_map[i][component_name].append(group_name)
                 else: # The ground truth info about a group managed by an FSM.
-                    timeline_map[i][group_info["component"]] = group_name
+                    if component_name not in timeline_map[i]:
+                        timeline_map[i][component_name] = []
+                    timeline_map[i][component_name].append(group_name)
+
+    print(timeline_map)
+    exit(1)
 
     return timeline_map, fsm_timeline_map, group_to_gt_segments
 
