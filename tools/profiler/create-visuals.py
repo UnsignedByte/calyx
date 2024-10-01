@@ -348,7 +348,8 @@ if __name__ == "__main__":
             "FSM_FLAME_GRAPH_FOLDED",
             "FREQUENCY_FLAME_GRAPH_FOLDED",
             "COMPONENT_FOLDED",
-            "FSM_COMPONENT_FOLDED"
+            "FSM_COMPONENT_FOLDED",
+            "PARS_JSON"
         ]
         print(f"Usage: {sys.argv[0]} {' '.join(args_desc)}")
         sys.exit(-1)
