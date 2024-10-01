@@ -62,9 +62,6 @@ def create_timeline_map(profiled_info, fsm_groups, all_groups):
                         timeline_map[i][component_name] = []
                     timeline_map[i][component_name].append(group_name)
 
-    print(timeline_map)
-    exit(1)
-
     return timeline_map, fsm_timeline_map, group_to_gt_segments
 
 def create_frequency_flame_graph(main_component, cells_map, timeline, group_to_gt_segments, frequency_flame_out):
@@ -107,11 +104,12 @@ def create_frequency_flame_graph(main_component, cells_map, timeline, group_to_g
     write_flame_graph(frequency_flame_out, frequency_stacks)
 
 # attempt to rehash the create_flame_graph to take care of stacks
-def create_flame_graph(main_component, cells_map, timeline, fsm_timeline, flame_out, fsm_flame_out, component_out, fsm_component_out):
-    stacks, component_stacks = compute_flame_stacks(cells_map, timeline, main_component)
+def create_flame_graph(main_component, cells_map, timeline, fsm_timeline, flame_out, fsm_flame_out, component_out, fsm_component_out, par_groups):
+    stacks, component_stacks = compute_flame_stacks(cells_map, timeline, main_component, par_groups)
+    print(stacks)
     write_flame_graph(flame_out, stacks)
     write_flame_graph(component_out, component_stacks)
-    fsm_stacks, fsm_component_stacks = compute_flame_stacks(cells_map, fsm_timeline, main_component)
+    fsm_stacks, fsm_component_stacks = compute_flame_stacks(cells_map, fsm_timeline, main_component, par_groups)
     write_flame_graph(fsm_flame_out, fsm_stacks)
     write_flame_graph(fsm_component_out, fsm_component_stacks)
 
@@ -193,7 +191,7 @@ def create_timeline_json(timeline, fsm_timeline, main_component, timeline_out, f
     with open(fsm_timeline_out, "w", encoding="utf-8") as fsm_timeline_file:
         fsm_timeline_file.write(json.dumps(fsm_timeline_json_data, indent=4))
 
-def compute_flame_stacks(cells_map, timeline, main_component):
+def compute_flame_stacks(cells_map, timeline, main_component, par_map):
     main_shortname = main_component.split("TOP.toplevel.")[1]
     stacks = {} # each stack to the # of cycles it was active for
     component_stacks = {} # view where we only look at cells/components
@@ -205,14 +203,28 @@ def compute_flame_stacks(cells_map, timeline, main_component):
         if len(timeline[i]) == 0:
             nonactive_cycles += 1
             continue
-        group_component = sorted(timeline[i], key=lambda k : timeline[i][k].count("."), reverse=True)[0]
-        group_full_name = timeline[i][group_component]
+        group_component = sorted(timeline[i], key=lambda k : timeline[i][k][0].count("."), reverse=True)[0]
         stack = ""
-        group_name = group_full_name.split(".")[-1]
         if group_component == main_shortname:
-            stack = main_component + ";" + group_name
+            main_pars = par_map[main_shortname]
+            component_active_groups = timeline[i][group_component]
+            if len(component_active_groups) == 1:
+                group_name = component_active_groups[0].split(f"{main_component}.")[1]
+                stack = main_component + ";" + group_name
+            else:
+                # find the base group
+                base_group = ""
+                base_group = list(main_pars.keys())[0] # for now, assume that we only have one par...
+                active_children = []
+                for child_group in sorted(main_pars[base_group]):
+                    if f"{main_component}.{child_group}" in component_active_groups:
+                        active_children.append(child_group)
+                stack = f"{main_component};{base_group};{'&'.join(active_children)}"
             component_stack = main_component
         else:
+            print("Parallelism: Not supporting multi-component programs right now.")
+            exit(1)
+            group_full_name = timeline[i][group_component][0]
             after_main = group_full_name.split(f"{main_component}.")[1]
             after_main_split = after_main.split(".")[:-1]
             # first, find the group in main that is simulatenous
@@ -286,20 +298,35 @@ def build_cells_map(json_file):
         cells_map[component_entry["component"]] = inner_cells_map
     return cells_map
 
-def main(profiler_dump_file, cells_json, timeline_out, fsm_timeline_out, flame_out, fsm_flame_out, frequency_flame_out, component_out, fsm_component_out):
+def build_pars_map(json_file):
+    pars_json = json.load(open(json_file))
+    pars_map = {} # components --> par group --> child group list
+    for entry in pars_json:
+        component = entry["component"]
+        if component not in pars_map:
+            pars_map[component] = {}
+        par_group = entry["par_group"]
+        if par_group not in pars_map[component]:
+            pars_map[component][par_group] = []
+        pars_map[component][par_group].append(entry["child_group"])
+    return pars_map
+
+def main(profiler_dump_file, cells_json, timeline_out, fsm_timeline_out, flame_out, fsm_flame_out, frequency_flame_out, component_out, fsm_component_out, pars_json):
     profiled_info = json.load(open(profiler_dump_file, "r"))
     fsm_groups, all_groups = get_fsm_groups(profiled_info)
     # This cells_map is different from the one in parse-vcd.py
     cells_map = build_cells_map(cells_json)
+    pars_map = build_pars_map(pars_json)
+    print(pars_map)
     timeline, fsm_timeline, group_to_gt_segments = create_timeline_map(profiled_info, fsm_groups, all_groups)
     summary = list(filter(lambda x : x["name"] == "TOTAL", profiled_info))[0]
     main_component = summary["main_full_path"]
-    create_flame_graph(main_component, cells_map, timeline, fsm_timeline, flame_out, fsm_flame_out, component_out, fsm_component_out)
-    create_timeline_json(timeline, fsm_timeline, main_component, timeline_out, fsm_timeline_out)
-    create_frequency_flame_graph(main_component, cells_map, timeline, group_to_gt_segments, frequency_flame_out)
+    create_flame_graph(main_component, cells_map, timeline, fsm_timeline, flame_out, fsm_flame_out, component_out, fsm_component_out, pars_map)
+    # create_timeline_json(timeline, fsm_timeline, main_component, timeline_out, fsm_timeline_out)
+    # create_frequency_flame_graph(main_component, cells_map, timeline, group_to_gt_segments, frequency_flame_out)
 
 if __name__ == "__main__":
-    if len(sys.argv) > 9:
+    if len(sys.argv) > 10:
         profiler_dump_json = sys.argv[1]
         cells_json = sys.argv[2]
         timeline_out = sys.argv[3]
@@ -309,7 +336,8 @@ if __name__ == "__main__":
         frequency_flame_out = sys.argv[7]
         component_flame_out = sys.argv[8]
         fsm_component_flame_out = sys.argv[9]
-        main(profiler_dump_json, cells_json, timeline_out, fsm_timeline_out, flame_out, fsm_flame_out, frequency_flame_out, component_flame_out, fsm_component_flame_out)
+        pars_json = sys.argv[10]
+        main(profiler_dump_json, cells_json, timeline_out, fsm_timeline_out, flame_out, fsm_flame_out, frequency_flame_out, component_flame_out, fsm_component_flame_out, pars_json)
     else:
         args_desc = [
             "PROFILER_JSON",
