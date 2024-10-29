@@ -295,6 +295,8 @@ struct ParInfo {
     pub par_group: Id,
     #[serde(serialize_with = "id_serialize_passthrough")]
     pub child_group: Id,
+    #[serde(serialize_with = "id_serialize_passthrough")]
+    pub register_name: Id,
 }
 
 /// Information to be serialized for a group that isn't managed by a FSM
@@ -1419,11 +1421,11 @@ impl Visitor for TopDownCompileControl {
                 pd["write_en"] = group_done ? signal_on["out"];
             );
             // Recording information for reconstructing par stacks in Profiling
-            print!("inserting into par set!!!");
             self.pars.insert(ParInfo {
                 component: builder.component.name,
                 par_group: par_group.borrow().name(),
                 child_group: group.borrow().name(),
+                register_name: pd.borrow().name(),
             });
             par_group.borrow_mut().assignments.extend(assigns);
             done_regs.push(pd)
