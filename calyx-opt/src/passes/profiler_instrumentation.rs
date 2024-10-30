@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::traversal::{Action, ConstructVisitor, Named, VisResult, Visitor};
 use calyx_ir::{self as ir, build_assignments, BoolAttr};
 use calyx_utils::CalyxResult;
@@ -38,6 +40,21 @@ impl Visitor for ProfilerInstrumentation {
         sigs: &ir::LibrarySignatures,
         _comps: &[ir::Component],
     ) -> VisResult {
+        // collect a map from groups to all invocations
+        let group_map: HashMap<ir::Id, Vec<ir::Id>> = HashMap::new();
+        // iterate and check whether any groups invoke other groups
+        for group_ref in comp.groups.iter() {
+            let group = &group_ref.borrow();
+            for assigment_ref in group.assignments.iter() {
+                let dst_borrow = assigment_ref.dst.borrow();
+                if let ir::PortParent::Group(parent_group_ref) =
+                    &dst_borrow.parent
+                {
+                    *parent_group_ref
+                }
+            }
+        }
+
         // collect names of all groups (to construct group-specific cells)
         let group_names = comp
             .groups
