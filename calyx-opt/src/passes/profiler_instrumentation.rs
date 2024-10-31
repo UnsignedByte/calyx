@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::traversal::{Action, ConstructVisitor, Named, VisResult, Visitor};
-use calyx_ir::{self as ir, build_assignments, BoolAttr};
+use calyx_ir::{self as ir, build_assignments, Assignment, BoolAttr, Nothing};
 use calyx_utils::CalyxResult;
 
 /// Adds probe wires to each group to detect when a group is active.
@@ -54,11 +54,10 @@ impl Visitor for ProfilerInstrumentation {
                 {
                     if dst_borrow.name == "go" {
                         // found an invocation of go
+                        // TODO: need to add probe here
                         let invoked_group_name =
                             parent_group_ref.upgrade().borrow().name();
-                        if !self.group_map.contains_key(&invoked_group_name) {}
-                        let x = self.group_map.get_mut(&invoked_group_name);
-                        match x {
+                        match self.group_map.get_mut(&invoked_group_name) {
                             Some(vec_ref) => vec_ref.push(group.name()),
                             None => {
                                 self.group_map.insert(
@@ -104,6 +103,62 @@ impl Visitor for ProfilerInstrumentation {
             group.borrow_mut().assignments.push(asgn);
             comp.cells.add(inst_cell);
         }
+        Ok(Action::Stop)
+    }
+
+    fn enable(
+        &mut self,
+        s: &mut calyx_ir::Enable,
+        comp: &mut calyx_ir::Component,
+        sigs: &calyx_ir::LibrarySignatures,
+        _comps: &[calyx_ir::Component],
+    ) -> VisResult {
+        let invoked_group_name = s.group.borrow().name();
+        match self.group_map.get_mut(&invoked_group_name) {
+            Some(vec_ref) => vec_ref.push(comp.name),
+            None => {
+                self.group_map.insert(invoked_group_name, vec![comp.name]);
+            }
+        }
+        // build a wrapper group
+        let mut builder = ir::Builder::new(comp, sigs);
+        let mut wrapper_group = builder.add_group("instrumentation_wrapper");
+        let probe_cell_name = format!(
+            "{}__{}_probe",
+            invoked_group_name,
+            wrapper_group.borrow().name()
+        );
+        let probe_cell =
+            builder.add_primitive(probe_cell_name, "std_wire", &[1]);
+        let one = builder.add_constant(1, 1);
+        wrapper_group.borrow().get("done");
+        let start_invoked_group: ir::Assignment<Nothing> = builder
+            .build_assignment(
+                s.group.borrow().get("go"),
+                one.borrow().get("out"),
+                calyx_ir::Guard::True,
+            );
+        let probe_asgn: ir::Assignment<Nothing> = builder.build_assignment(
+            probe_cell.borrow().get("in"),
+            one.borrow().get("out"),
+            calyx_ir::Guard::True,
+        );
+
+        // let asgn: [ir::Assignment<ir::Nothing>; 3] = build_assignments!(builder;
+        //     // invoked_group_name["go"] = ? one["out"]; // start the group
+        //     probe_cell["in"] = ? one["out"]; // instrumentation cell
+        //     wrapper_group["done"] = ? invoked_group_name["done"]; // wrapper group ends when initial group is over
+        // );
+        Ok(Action::Continue) // need to call Action::change() to swap out
+    }
+
+    fn finish(
+        &mut self,
+        _comp: &mut calyx_ir::Component,
+        _sigs: &calyx_ir::LibrarySignatures,
+        _comps: &[calyx_ir::Component],
+    ) -> VisResult {
+        // return
         Ok(Action::Stop)
     }
 }
