@@ -6,7 +6,9 @@ use calyx_utils::CalyxResult;
 
 /// Adds probe wires to each group to detect when a group is active.
 /// Used by the profiler.
-pub struct ProfilerInstrumentation {}
+pub struct ProfilerInstrumentation {
+    group_map: HashMap<ir::Id, Vec<ir::Id>>,
+}
 
 impl Named for ProfilerInstrumentation {
     fn name() -> &'static str {
@@ -27,7 +29,9 @@ impl ConstructVisitor for ProfilerInstrumentation {
     where
         Self: Sized + Named,
     {
-        Ok(ProfilerInstrumentation {})
+        Ok(ProfilerInstrumentation {
+            group_map: HashMap::new(),
+        })
     }
 
     fn clear_data(&mut self) {}
@@ -40,8 +44,6 @@ impl Visitor for ProfilerInstrumentation {
         sigs: &ir::LibrarySignatures,
         _comps: &[ir::Component],
     ) -> VisResult {
-        // collect a map from groups to all invocations
-        let group_map: HashMap<ir::Id, Vec<ir::Id>> = HashMap::new();
         // iterate and check whether any groups invoke other groups
         for group_ref in comp.groups.iter() {
             let group = &group_ref.borrow();
@@ -50,11 +52,25 @@ impl Visitor for ProfilerInstrumentation {
                 if let ir::PortParent::Group(parent_group_ref) =
                     &dst_borrow.parent
                 {
-                    *parent_group_ref
+                    if dst_borrow.name == "go" {
+                        // found an invocation of go
+                        let invoked_group_name =
+                            parent_group_ref.upgrade().borrow().name();
+                        if !self.group_map.contains_key(&invoked_group_name) {}
+                        let x = self.group_map.get_mut(&invoked_group_name);
+                        match x {
+                            Some(vec_ref) => vec_ref.push(group.name()),
+                            None => {
+                                self.group_map.insert(
+                                    invoked_group_name,
+                                    vec![group.name()],
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
-
         // collect names of all groups (to construct group-specific cells)
         let group_names = comp
             .groups
