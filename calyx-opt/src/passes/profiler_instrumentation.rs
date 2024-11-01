@@ -8,7 +8,7 @@ use calyx_utils::CalyxResult;
 /// Used by the profiler.
 pub struct ProfilerInstrumentation {
     // map from group to invocations
-    group_map: HashMap<ir::Id, Vec<ir::Id>>,
+    group_map: HashMap<ir::Id, Vec<(ir::Id, ir::Guard<Nothing>)>>,
 }
 
 impl Named for ProfilerInstrumentation {
@@ -59,12 +59,15 @@ impl Visitor for ProfilerInstrumentation {
                         // TODO: need to add probe here
                         let invoked_group_name =
                             parent_group_ref.upgrade().borrow().name();
+                        let guard = *(assigment_ref.guard.clone());
                         match self.group_map.get_mut(&invoked_group_name) {
-                            Some(vec_ref) => vec_ref.push(group.name()),
+                            Some(vec_ref) => {
+                                vec_ref.push((group.name(), guard))
+                            }
                             None => {
                                 self.group_map.insert(
                                     invoked_group_name,
-                                    vec![group.name()],
+                                    vec![(group.name(), guard)],
                                 );
                             }
                         }
@@ -78,7 +81,7 @@ impl Visitor for ProfilerInstrumentation {
         let mut group_name_assign_and_cell = Vec::with_capacity(acc);
         {
             for (invoked_group_name, parent_groups) in self.group_map.iter() {
-                for parent_group in parent_groups.iter() {
+                for (parent_group, guard) in parent_groups.iter() {
                     let probe_cell_name = format!(
                         "{}__{}_probe",
                         invoked_group_name, parent_group
@@ -93,14 +96,15 @@ impl Visitor for ProfilerInstrumentation {
                         .borrow_mut()
                         .add_attribute(BoolAttr::Protected, 1);
                     let one = builder.add_constant(1, 1);
+                    // FIXME: the assignment needs to take on the guard of the assignment.
                     let probe_asgn: ir::Assignment<Nothing> = builder
                         .build_assignment(
                             probe_cell.borrow().get("in"),
                             one.borrow().get("out"),
-                            calyx_ir::Guard::True,
+                            guard.clone(),
                         );
                     group_name_assign_and_cell.push((
-                        invoked_group_name.clone(),
+                        parent_group.clone(),
                         probe_asgn,
                         probe_cell,
                     ));
@@ -127,11 +131,13 @@ impl Visitor for ProfilerInstrumentation {
         _comps: &[calyx_ir::Component],
     ) -> VisResult {
         let invoked_group_name = s.group.borrow().name();
-        println!("group name: {}", invoked_group_name);
         match self.group_map.get_mut(&invoked_group_name) {
-            Some(vec_ref) => vec_ref.push(comp.name),
+            Some(vec_ref) => vec_ref.push((comp.name, calyx_ir::Guard::True)),
             None => {
-                self.group_map.insert(invoked_group_name, vec![comp.name]);
+                self.group_map.insert(
+                    invoked_group_name,
+                    vec![(comp.name, calyx_ir::Guard::True)],
+                );
             }
         }
         // build a wrapper group
@@ -173,9 +179,9 @@ impl Visitor for ProfilerInstrumentation {
             calyx_ir::Guard::True,
         );
         wrapper_group.borrow_mut().assignments.push(wrapper_done);
-        comp.groups.add(wrapper_group);
         // TODO: need to replace the invocation of the original group with the wrapper group
-        Ok(Action::Continue) // need to call Action::change() to swap out
+        let en = ir::Control::enable(wrapper_group);
+        Ok(Action::change(en)) // need to call Action::change() to swap out
     }
 
     fn finish(
