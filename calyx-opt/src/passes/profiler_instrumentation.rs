@@ -56,7 +56,7 @@ impl Visitor for ProfilerInstrumentation {
                 {
                     if dst_borrow.name == "go" {
                         // found an invocation of go
-                        // TODO: need to add probe here
+                        // FIXME: guard needs to be anded with the child group not being done
                         let invoked_group_name =
                             parent_group_ref.upgrade().borrow().name();
                         let guard = *(assigment_ref.guard.clone());
