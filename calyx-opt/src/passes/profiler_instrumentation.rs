@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::traversal::{Action, ConstructVisitor, Named, VisResult, Visitor};
-use calyx_ir::{self as ir, BoolAttr, Nothing};
+use calyx_ir::{self as ir, BoolAttr, Guard, Nothing};
 use calyx_utils::CalyxResult;
 
 /// Adds probe wires to each group to detect when a group is active.
@@ -55,19 +55,26 @@ impl Visitor for ProfilerInstrumentation {
                     &dst_borrow.parent
                 {
                     if dst_borrow.name == "go" {
+                        let d = parent_group_ref.upgrade().borrow().get("done");
                         // found an invocation of go
                         // FIXME: guard needs to be anded with the child group not being done
                         let invoked_group_name =
                             parent_group_ref.upgrade().borrow().name();
                         let guard = *(assigment_ref.guard.clone());
+                        let combined_guard: Guard<Nothing> = Guard::And(
+                            Box::new(guard),
+                            Box::new(Guard::Not(Box::new(Guard::port(
+                                d.clone(),
+                            )))),
+                        );
                         match self.group_map.get_mut(&invoked_group_name) {
                             Some(vec_ref) => {
-                                vec_ref.push((group.name(), guard))
+                                vec_ref.push((group.name(), combined_guard))
                             }
                             None => {
                                 self.group_map.insert(
                                     invoked_group_name,
-                                    vec![(group.name(), guard)],
+                                    vec![(group.name(), combined_guard)],
                                 );
                             }
                         }
@@ -96,7 +103,7 @@ impl Visitor for ProfilerInstrumentation {
                         .borrow_mut()
                         .add_attribute(BoolAttr::Protected, 1);
                     let one = builder.add_constant(1, 1);
-                    // FIXME: the assignment needs to take on the guard of the assignment.
+                    // FIXME: the assignment needs to take on the guard of the assignment and not the child group being done
                     let probe_asgn: ir::Assignment<Nothing> = builder
                         .build_assignment(
                             probe_cell.borrow().get("in"),
