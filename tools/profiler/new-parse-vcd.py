@@ -9,17 +9,34 @@ def remove_size_from_name(name: str) -> str:
     return name.split('[')[0]
 
 class ProfilingInfo:
-    def __init__(self, probe_encoded_name):
-        encoding_split = probe_encoded_name.split("__")
-        self.group_name = encoding_split[0]
-        self.callsite = encoding_split[1]
-        self.component = encoding_split[2]
+    def __init__(self, probe_encoded_name, is_cell=False):
+        if is_cell:
+            self.name = probe_encoded_name
+        else:
+            encoding_split = probe_encoded_name.split("__")
+            self.name = encoding_split[0]
+            self.callsite = encoding_split[1]
+            self.component = encoding_split[2]
         self.closed_segments = [] # Segments will be (start_time, end_time)
         self.current_segment = None
         self.total_cycles = 0
+        self.is_cell = is_cell
 
-    def __repr__(self):
-        return f"{self.group_name} {self.callsite} {self.component} segments: {self.closed_segments}"
+    def __repr__ (self):
+        segments_str = ""
+        for segment in self.closed_segments:
+            if (segments_str != ""):
+                segments_str += ", "
+            segments_str += f"[{segment['start']}, {segment['end']})"
+        if self.is_cell:
+            header = f"[Cell] {self.name}\n" # FIXME: fix this later
+        else:
+            header = f"[{self.component}][{self.callsite}] {self.name}\n"
+        return (header +
+        f"\tTotal cycles: {self.total_cycles}\n" +
+        f"\t# of times active: {len(self.closed_segments)}\n" +
+        f"\tSegments: {segments_str}\n"
+        )    
 
     def start_new_segment(self, curr_clock_cycle):
         if self.current_segment is None:
@@ -46,6 +63,8 @@ class VCDConverter(vcdvcd.StreamParserCallbacks):
         self.timestamps_to_events = {}
         self.cells = cells_to_components
         self.profiling_info = {}
+        for cell in self.cells:
+            self.profiling_info[cell] = ProfilingInfo(cell, is_cell=True)
 
     def enddefinitions(self, vcd, signals, cur_sig_vals):
         # convert references to list and sort by name
@@ -60,20 +79,16 @@ class VCDConverter(vcdvcd.StreamParserCallbacks):
             sys.exit(1)
         signal_id_dict[vcd.references_to_ids[clock_name]] = [clock_name]
 
-        # hardcoding...
-        main = "TOP.toplevel.main"
-        signal_id_dict[vcd.references_to_ids[f"{main}.go"]].append(f"{main}.go")
-        signal_id_dict[vcd.references_to_ids[f"{main}.done"]].append(f"{main}.done")
         # get go and done for cells (the signals are exactly {cell}.go and {cell}.done)
-        # for cell in self.cells:
-        #     # FIXME: check if anything here is different when we go over multicomponent programs
-        #     cell_go = cell + ".go"
-        #     cell_done = cell + ".done"
-        #     if cell_go not in vcd.references_to_ids:
-        #         print(f"Not accounting for cell {cell} (probably combinational)")
-        #         continue
-        #     signal_id_dict[vcd.references_to_ids[cell_go]].append(cell_go)
-        #     signal_id_dict[vcd.references_to_ids[cell_done]].append(cell_done)
+        for cell in self.cells:
+            # FIXME: check if anything here is different when we go over multicomponent programs
+            cell_go = cell + ".go"
+            cell_done = cell + ".done"
+            if cell_go not in vcd.references_to_ids:
+                print(f"Not accounting for cell {cell} (probably combinational)")
+                continue
+            signal_id_dict[vcd.references_to_ids[cell_go]].append(cell_go)
+            signal_id_dict[vcd.references_to_ids[cell_done]].append(cell_done)
 
         for name, sid in refs:
             # check if we have a probe. instrumentation probes are "<group>__<callsite>__<component>_probe".
@@ -126,14 +141,12 @@ class VCDConverter(vcdvcd.StreamParserCallbacks):
             for event in events:
                 signal_name = event["signal"]
                 value = event["value"]
-                print(signal_name)
-                # FIXME: add this in
-                # if signal_name.endswith(".go") and value == 1: # cells have .go and .done
-                #     cell = signal_name.split(".go")[0]
-                #     self.profiling_info[cell].start_new_segment(clock_cycles)
-                # if signal_name.endswith(".done") and value == 1: # cells have .go and .done
-                #     cell = signal_name.split(".done")[0]
-                #     self.profiling_info[cell].end_current_segment(clock_cycles)
+                if signal_name.endswith(".go") and value == 1: # cells have .go and .done
+                    cell = signal_name.split(".go")[0]
+                    self.profiling_info[cell].start_new_segment(clock_cycles)
+                if signal_name.endswith(".done") and value == 1: # cells have .go and .done
+                    cell = signal_name.split(".done")[0]
+                    self.profiling_info[cell].end_current_segment(clock_cycles)
                 if "_probe_out" in signal_name and value == 1: # instrumented group started being active
                     encoded_info = signal_name.split("_probe_out")[0]
                     self.profiling_info[encoded_info].start_new_segment(clock_cycles)
@@ -142,8 +155,6 @@ class VCDConverter(vcdvcd.StreamParserCallbacks):
                     self.profiling_info[encoded_info].end_current_segment(clock_cycles)
 
         self.clock_cycles = clock_cycles
-
-    
 
 # Generates a list of all of the components to potential cell names
 # `prefix` is the cell's "path" (ex. for a cell "my_cell" defined in "main", the prefix would be "TOP.toplevel.main")
@@ -174,19 +185,37 @@ def read_component_cell_names_json(json_file):
     full_main_component = f"TOP.toplevel.{main_component}"
     components_to_cells = {main_component : [full_main_component]} # come up with a better name for this
     build_components_to_cells(full_main_component, main_component, cells_to_components, components_to_cells)
-    return full_main_component, cells_to_components
+    # FIXME: extreme hack. Find a better way to do this...
+    full_cell_names_to_components = {}
+    for component in components_to_cells:
+        for cell in components_to_cells[component]:
+            full_cell_names_to_components[cell] = component
+
+    return full_main_component, full_cell_names_to_components
+
+def create_traces(profiled_info, total_cycles, main_component):
+    timeline_map = {i : set() for i in range(total_cycles)}
+    # first iterate through all of the cells
+    for cell_info in filter(lambda x : "is_cell" in x and x["is_cell"], profiled_info):
+        for segment in cell_info["closed_segments"]:
+            for i in range(segment["start"], segment["end"]):
+                timeline_map[i].add()
+    
+    return
 
 def main(vcd_filename, cells_json_file):
-    # FIXME: will support multicomponent programs later. There's probably something wrong here.
+    # FIXME: will support multicomponent programs later. There's maybe something wrong here.
     main_component, cells_to_components = read_component_cell_names_json(cells_json_file)
     converter = VCDConverter(main_component, cells_to_components)
     vcdvcd.VCDVCD(vcd_filename, callbacks=converter)
-    # fsms, tdcc_group_names, fsm_group_maps, cells = remap_tdcc_json(tdcc_json_file, components_to_cells)
-    # converter = VCDConverter(fsms, tdcc_group_names, fsm_group_maps, main_component, cells)
-    # vcdvcd.VCDVCD(vcd_filename, callbacks=converter, store_tvs=False)
     converter.postprocess()
-    print(converter.profiling_info)
-    # output_result(out_csv, dump_out_json, converter)
+    for e in converter.profiling_info:
+        print(converter.profiling_info[e])
+
+    # NOTE: for a more robust implementation, we can even skip the part where we store active
+    # cycles per group.
+
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 2:
