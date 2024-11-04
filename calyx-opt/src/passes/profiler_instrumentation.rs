@@ -46,6 +46,7 @@ impl Visitor for ProfilerInstrumentation {
         _comps: &[ir::Component],
     ) -> VisResult {
         let mut acc = 0;
+        let comp_name = comp.name;
         // iterate and check whether any groups invoke other groups
         for group_ref in comp.groups.iter() {
             let group = &group_ref.borrow();
@@ -90,8 +91,8 @@ impl Visitor for ProfilerInstrumentation {
             for (invoked_group_name, parent_groups) in self.group_map.iter() {
                 for (parent_group, guard) in parent_groups.iter() {
                     let probe_cell_name = format!(
-                        "{}__{}_probe",
-                        invoked_group_name, parent_group
+                        "{}__{}__{}_probe",
+                        invoked_group_name, parent_group, comp_name
                     );
                     let probe_cell = builder.add_primitive(
                         probe_cell_name,
@@ -138,12 +139,13 @@ impl Visitor for ProfilerInstrumentation {
         _comps: &[calyx_ir::Component],
     ) -> VisResult {
         let invoked_group_name = s.group.borrow().name();
+        let comp_name = comp.name;
         match self.group_map.get_mut(&invoked_group_name) {
-            Some(vec_ref) => vec_ref.push((comp.name, calyx_ir::Guard::True)),
+            Some(vec_ref) => vec_ref.push((comp_name, calyx_ir::Guard::True)),
             None => {
                 self.group_map.insert(
                     invoked_group_name,
-                    vec![(comp.name, calyx_ir::Guard::True)],
+                    vec![(comp_name, calyx_ir::Guard::True)],
                 );
             }
         }
@@ -151,9 +153,10 @@ impl Visitor for ProfilerInstrumentation {
         let mut builder = ir::Builder::new(comp, sigs);
         let wrapper_group = builder.add_group("instrumentation_wrapper");
         let probe_cell_name = format!(
-            "{}__{}_probe",
+            "{}__{}__{}_probe",
             invoked_group_name,
-            wrapper_group.borrow().name()
+            wrapper_group.borrow().name(),
+            comp_name // wrapper_group.borrow().name()
         );
         let probe_cell =
             builder.add_primitive(probe_cell_name, "std_wire", &[1]);
