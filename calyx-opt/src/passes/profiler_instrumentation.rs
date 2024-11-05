@@ -56,7 +56,8 @@ impl Visitor for ProfilerInstrumentation {
                     &dst_borrow.parent
                 {
                     if dst_borrow.name == "go" {
-                        let d = parent_group_ref.upgrade().borrow().get("done");
+                        let done_port_ref =
+                            parent_group_ref.upgrade().borrow().get("done");
                         // found an invocation of go
                         // FIXME: guard needs to be anded with the child group not being done
                         let invoked_group_name =
@@ -65,7 +66,7 @@ impl Visitor for ProfilerInstrumentation {
                         let combined_guard: Guard<Nothing> = Guard::And(
                             Box::new(guard),
                             Box::new(Guard::Not(Box::new(Guard::port(
-                                d.clone(),
+                                done_port_ref.clone(),
                             )))),
                         );
                         match self.group_map.get_mut(&invoked_group_name) {

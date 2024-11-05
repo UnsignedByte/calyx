@@ -5,11 +5,11 @@ use crate::passes::{
     CompileInvoke, CompileRepeat, CompileStatic, ComponentInliner,
     DataPathInfer, DeadAssignmentRemoval, DeadCellRemoval, DeadGroupRemoval,
     DefaultAssigns, Externalize, GoInsertion, GroupToInvoke, GroupToSeq,
-    InferShare, LowerGuards, MergeAssign, Papercut, ProfilerInstrumentation,
-    RemoveIds, ResetInsertion, SimplifyStaticGuards, SimplifyWithControl,
-    StaticFSMOpts, StaticInference, StaticInliner, StaticPromotion,
-    SynthesisPapercut, TopDownCompileControl, UnrollBounded, WellFormed,
-    WireInliner, WrapMain,
+    InferShare, InlineStructuralGroupEnables, LowerGuards, MergeAssign,
+    Papercut, ProfilerInstrumentation, RemoveIds, ResetInsertion,
+    SimplifyStaticGuards, SimplifyWithControl, StaticFSMOpts, StaticInference,
+    StaticInliner, StaticPromotion, SynthesisPapercut, TopDownCompileControl,
+    UnrollBounded, WellFormed, WireInliner, WrapMain,
 };
 use crate::passes_experimental::{
     CompileSync, CompileSyncWithoutSyncReg, DiscoverExternal, ExternalToRef,
