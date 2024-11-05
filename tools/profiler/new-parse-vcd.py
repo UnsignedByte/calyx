@@ -8,21 +8,38 @@ def remove_size_from_name(name: str) -> str:
     """ changes e.g. "state[2:0]" to "state" """
     return name.split('[')[0]
 
+class StackTree:
+    def __init__(self, name, data):
+        self.key = name
+        self.data = data
+        self.children = []
+
+
 class ProfilingInfo:
     def __init__(self, probe_encoded_name, is_cell=False):
         if is_cell:
             self.name = probe_encoded_name
+            self.callsite = None
+            self.component = None
         else:
             encoding_split = probe_encoded_name.split("__")
             self.name = encoding_split[0]
             self.callsite = encoding_split[1]
             self.component = encoding_split[2]
+        self.shortname = self.name.split(".")[-1]
         self.closed_segments = [] # Segments will be (start_time, end_time)
         self.current_segment = None
         self.total_cycles = 0
         self.is_cell = is_cell
 
     def __repr__ (self):
+        if self.is_cell:
+            header = f"[Cell] {self.name}" # FIXME: fix this later
+        else:
+            header = f"[{self.component}][{self.callsite}] {self.name}"
+        return header
+
+    def nice_repr (self):
         segments_str = ""
         for segment in self.closed_segments:
             if (segments_str != ""):
@@ -195,13 +212,59 @@ def read_component_cell_names_json(json_file):
 
 def create_traces(profiled_info, total_cycles, main_component):
     timeline_map = {i : set() for i in range(total_cycles)}
-    # first iterate through all of the cells
-    for cell_info in filter(lambda x : "is_cell" in x and x["is_cell"], profiled_info):
-        for segment in cell_info["closed_segments"]:
+    # first iterate through all of the profiled info
+    for unit_name in profiled_info:
+        unit = profiled_info[unit_name]
+        for segment in unit.closed_segments:
             for i in range(segment["start"], segment["end"]):
-                timeline_map[i].add()
-    
-    return
+                timeline_map[i].add(unit) # maybe too memory intensive?
+
+    # print debugging. remove later
+    # for i in timeline_map:
+    #     print(i)
+    #     for elem in timeline_map[i]:
+    #         print("\t" + elem.name)
+    # exit(1)
+
+    new_timeline_map = {i : [] for i in range(total_cycles)}
+    # now, we need to figure out the sets of traces
+    for i in timeline_map:
+        parents = set()
+        i_mapping = {} # each unique group inv mapping to its stack. the "group" should be the last item on each stack
+        # FIXME: probably want to wrap this around a while loop or sth?
+        curr_component = main_component
+        main_component_info = list(filter(lambda x : x.name == main_component, timeline_map[i]))[0]
+        i_mapping[main_component_info] = [main_component_info]
+        # find all of the invocations from control
+        for elem in filter((lambda x: x.callsite is not None and "instrumentation_wrapper" in x.callsite), timeline_map[i]):
+            i_mapping[elem] = i_mapping[main_component_info] + [elem]
+            parents.add(main_component_info)
+        # now, walk through everything else before saturation
+        new_groups = set()
+        started = False
+        while not started or len(new_groups) == 1:
+            started = True
+            new_groups = set()
+            for elem in timeline_map[i]:
+                if elem in i_mapping:
+                    continue
+                parent_find_attempt = list(filter(lambda x : x.shortname == elem.callsite, i_mapping))
+                if len(parent_find_attempt) == 1: # found a match!
+                    parent_info = parent_find_attempt[0]
+                    i_mapping[elem] = i_mapping[parent_info] + [elem]
+                    parents.add(parent_info)
+                    new_groups.add(elem)
+
+        for elem in i_mapping:
+            if elem not in parents:
+                new_timeline_map[i].append(i_mapping[elem])
+        
+    for i in new_timeline_map:
+        print(i)
+        for stack in new_timeline_map[i]:
+            print(f"\t{stack}")
+
+    return new_timeline_map
 
 def main(vcd_filename, cells_json_file):
     # FIXME: will support multicomponent programs later. There's maybe something wrong here.
@@ -209,12 +272,10 @@ def main(vcd_filename, cells_json_file):
     converter = VCDConverter(main_component, cells_to_components)
     vcdvcd.VCDVCD(vcd_filename, callbacks=converter)
     converter.postprocess()
-    for e in converter.profiling_info:
-        print(converter.profiling_info[e])
 
     # NOTE: for a more robust implementation, we can even skip the part where we store active
     # cycles per group.
-
+    create_traces(converter.profiling_info, converter.clock_cycles, main_component)
 
 
 if __name__ == "__main__":
