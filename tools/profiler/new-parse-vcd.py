@@ -32,6 +32,12 @@ class ProfilingInfo:
         self.current_segment = None
         self.total_cycles = 0
         self.is_cell = is_cell
+    
+    def flame_repr(self):
+        if self.is_cell:
+            return self.name
+        else:
+            return self.shortname
 
     def __repr__ (self):
         if self.is_cell:
@@ -220,13 +226,6 @@ def create_traces(profiled_info, total_cycles, main_component):
             for i in range(segment["start"], segment["end"]):
                 timeline_map[i].add(unit) # maybe too memory intensive?
 
-    # print debugging. remove later
-    # for i in timeline_map:
-    #     print(i)
-    #     for elem in timeline_map[i]:
-    #         print("\t" + elem.name)
-    # exit(1)
-
     new_timeline_map = {i : [] for i in range(total_cycles)}
     # now, we need to figure out the sets of traces
     for i in timeline_map:
@@ -282,7 +281,19 @@ def create_output(timeline_map, out_dir):
                 f.write(acc)
             f.write("}")
 
-
+    # make flame graph folded file
+    stacks = {} # stack to number of cycles
+    for i in timeline_map:
+        for stack_list in timeline_map[i]:
+            stack_str = ";".join(map(lambda x : x.flame_repr(), stack_list))
+            if stack_str not in stacks:
+                stacks[stack_str] = 1
+            else:
+                stacks[stack_str] += 1
+    
+    with open(os.path.join(out_dir, "flame.folded"), "w") as flame_out:
+        for stack in stacks:
+            flame_out.write(f"{stack} {stacks[stack]}\n")
 
 def main(vcd_filename, cells_json_file, out_dir):
     # FIXME: will support multicomponent programs later. There's maybe something wrong here.
