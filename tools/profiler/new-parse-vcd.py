@@ -1,4 +1,5 @@
 import csv
+import os
 import re
 import sys
 import json
@@ -266,7 +267,24 @@ def create_traces(profiled_info, total_cycles, main_component):
 
     return new_timeline_map
 
-def main(vcd_filename, cells_json_file):
+def create_output(timeline_map, out_dir):
+    os.mkdir(out_dir)
+    for i in timeline_map:
+        fpath = os.path.join(out_dir, f"cycle{i}.dot")
+        # really lazy rn but I should actually use a library for this
+        with open(fpath, "w") as f:
+            f.write("digraph cycle" + str(i) + " {\n")
+            for stack in timeline_map[i]:
+                acc = "\t"
+                for stack_elem in stack[0:-1]:
+                    acc += stack_elem.shortname + " -> "
+                acc += stack[-1].shortname + ";\n"
+                f.write(acc)
+            f.write("}")
+
+
+
+def main(vcd_filename, cells_json_file, out_dir):
     # FIXME: will support multicomponent programs later. There's maybe something wrong here.
     main_component, cells_to_components = read_component_cell_names_json(cells_json_file)
     converter = VCDConverter(main_component, cells_to_components)
@@ -275,18 +293,22 @@ def main(vcd_filename, cells_json_file):
 
     # NOTE: for a more robust implementation, we can even skip the part where we store active
     # cycles per group.
-    create_traces(converter.profiling_info, converter.clock_cycles, main_component)
+    new_timeline_map = create_traces(converter.profiling_info, converter.clock_cycles, main_component)
+
+    create_output(new_timeline_map, out_dir)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 2:
+    if len(sys.argv) > 3:
         vcd_filename = sys.argv[1]
         cells_json = sys.argv[2]
-        main(vcd_filename, cells_json)
+        out_dir = sys.argv[3]
+        main(vcd_filename, cells_json, out_dir)
     else:
         args_desc = [
             "VCD_FILE",
             "CELLS_JSON",
+            "OUT_DIR"
         ]
         print(f"Usage: {sys.argv[0]} {' '.join(args_desc)}")
         print("CELLS_JSON: Run the `component_cells` tool")
