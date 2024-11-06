@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::traversal::{Action, ConstructVisitor, Named, VisResult, Visitor};
-use calyx_ir::{self as ir};
+use calyx_ir::{self as ir, Guard};
 
 // Removes structural enables by inlining callee into caller group.
 // Used by the profiler.
@@ -64,8 +64,11 @@ impl Visitor for InlineStructuralGroupEnables {
                             // (1) can't copy over the done port assignment, but we need to keep the guard for that.
                             // within the rest of this group, need to iterate over all uses of child[done] and replace
                             // with the guard for the done. (iterate until saturation?)
-                            let modified_asgn = asgn.clone();
-                            modified_asgn
+                            let mut modified_asgn = asgn.clone();
+                            modified_asgn.guard = Box::new(Guard::And(
+                                child_group_go_guard.clone(),
+                                asgn.guard.clone(),
+                            ));
                             asgns_to_add.push(modified_asgn);
                         }
                     }
