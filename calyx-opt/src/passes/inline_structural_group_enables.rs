@@ -44,6 +44,8 @@ impl Visitor for InlineStructuralGroupEnables {
         for group_ref in comp.groups.iter() {
             let group = &group_ref.borrow();
             let mut asgns_to_add = Vec::new();
+            let mut done_guards = HashMap::new();
+            let mut asgns_to_remove = Vec::new();
             for assignment_ref in group.assignments.iter() {
                 let dst_borrow = assignment_ref.dst.borrow();
                 if let ir::PortParent::Group(child_group_ref) =
@@ -70,10 +72,21 @@ impl Visitor for InlineStructuralGroupEnables {
                                 asgn.guard.clone(),
                             ));
                             asgns_to_add.push(modified_asgn);
+
+                            if dst_borrow.name == "done" {
+                                // child group's done condition. need to collect the guard to done
+                                let child_group_done_guard =
+                                    assignment_ref.guard.clone();
+                                done_guards.insert(
+                                    child_group_ref.upgrade().borrow().name(),
+                                    child_group_done_guard.clone(),
+                                );
+                            }
                         }
                     }
                 }
             }
+            // iterate a second time to catch all of the assignments we need to modify (guards that use child groups' go and done conditions)
         }
 
         Ok(Action::Continue)
