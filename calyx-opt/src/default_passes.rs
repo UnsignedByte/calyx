@@ -80,6 +80,7 @@ impl PassManager {
         pm.register_pass::<ExternalToRef>()?;
 
         pm.register_pass::<ProfilerInstrumentation>()?;
+        pm.register_pass::<InlineStructuralGroupEnables>()?;
 
         //add metadata
         pm.register_pass::<Metadata>()?;

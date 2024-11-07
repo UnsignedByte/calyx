@@ -382,6 +382,47 @@ impl<T> Guard<T> {
             Guard::Info(_) => vec![],
         }
     }
+
+    pub fn search_replace_group_done(
+        &mut self,
+        group_name: calyx_utils::Id,
+        new_guard: &Guard<T>,
+    ) where
+        T: Clone,
+    {
+        match self {
+            Guard::Or(guard, guard1) => {
+                guard.search_replace_group_done(group_name, new_guard);
+                guard1.search_replace_group_done(group_name, new_guard);
+            }
+            Guard::And(guard, guard1) => {
+                guard.search_replace_group_done(group_name, new_guard);
+                guard1.search_replace_group_done(group_name, new_guard);
+            }
+            Guard::Not(guard) => {
+                guard.search_replace_group_done(group_name, new_guard)
+            }
+            Guard::Port(rc) => {
+                let rc_borrow = rc.borrow();
+                let mut replace = false;
+                if let crate::PortParent::Group(guard_group) = &rc_borrow.parent
+                {
+                    // if group is the one we're looking for and if the port is done
+                    if (guard_group.upgrade().borrow().name() == group_name)
+                        & (rc_borrow.name == "done")
+                    {
+                        replace = true;
+                    }
+                }
+                drop(rc_borrow);
+                if replace {
+                    let new_guard_clone = new_guard.clone();
+                    self.update(|_| new_guard_clone);
+                }
+            }
+            _ => (),
+        }
+    }
 }
 
 /// Helper functions for the guard.
