@@ -61,7 +61,7 @@ impl Visitor for InlineStructuralGroupEnables {
         for group_ref in comp.groups.iter() {
             let mut group = group_ref.borrow_mut();
             let mut asgns_to_add = Vec::new();
-            let mut done_guards = HashMap::new();
+            let mut child_groups = Vec::new();
             let mut keep_asgn = Vec::new();
             for assignment_ref in group.assignments.iter() {
                 let dst_borrow = assignment_ref.dst.borrow();
@@ -78,6 +78,7 @@ impl Visitor for InlineStructuralGroupEnables {
                             child_group_ref.upgrade().borrow().name(),
                             *child_group_go_guard,
                         );
+                        child_groups.push(child_group_ref.upgrade().borrow().name());
                         // child_go_cell
                         let child_go_cell_opt =
                             group_names_to_cells.get(&child_group_ref.upgrade().borrow().name());
@@ -204,12 +205,18 @@ impl Visitor for InlineStructuralGroupEnables {
                 // cases where the guard uses childrens' done signal
                 let mut modified_guard = assignment_ref.guard.clone();
                 let mut replaced_guard = false;
-                for (child_group, child_group_guard) in
-                    done_guards.clone().into_iter()
+                for child_group_name in
+                    child_groups.clone().into_iter()
                 {
+                    let child_done_cell = 
+                    match group_names_to_cells.get(&child_group_name) {
+                        Some((_, done)) => done,
+                        None => panic!("Pass-specific cells for the group {} should exist!", child_group_name)
+                    };
+                    let child_done_cell_port = Guard::port(child_done_cell.borrow().get("out"));
                     replaced_guard |= modified_guard.search_replace_group_done(
-                        child_group,
-                        &child_group_guard,
+                        child_group_name,
+                        &child_done_cell_port,
                     );
                 }
                 if replaced_guard {
