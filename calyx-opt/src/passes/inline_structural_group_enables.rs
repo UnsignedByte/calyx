@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap};
 
 use crate::traversal::{Action, ConstructVisitor, Named, VisResult, Visitor};
 use calyx_ir::{self as ir, Guard};
@@ -37,8 +37,26 @@ impl Visitor for InlineStructuralGroupEnables {
         sigs: &calyx_ir::LibrarySignatures,
         _comps: &[calyx_ir::Component],
     ) -> VisResult {
+        let group_names = comp
+            .groups
+            .iter()
+            .map(|g| g.borrow().name())
+            .collect::<Vec<_>>();
+
         let mut builder = ir::Builder::new(comp, sigs);
         let one = builder.add_constant(1, 1);
+        // make cells for all groups preemptively and get dead-cell-removal to remove them. lol
+        let mut group_names_to_cells = HashMap::new();
+        for group_name in group_names.iter() {
+            let group_go_cell_name = format!("{}_enable_go", group_name);
+            let group_done_cell_name = format!("{}_enable_done", group_name);
+            let group_go_cell =
+                builder.add_primitive(group_go_cell_name, "std_wire", &[1]);
+            let group_done_cell =
+                builder.add_primitive(group_done_cell_name, "std_wire", &[1]);
+            group_names_to_cells
+                .insert(group_name, (group_go_cell, group_done_cell));
+        }
         // look for structural enables
         for group_ref in comp.groups.iter() {
             let mut group = group_ref.borrow_mut();
@@ -60,6 +78,22 @@ impl Visitor for InlineStructuralGroupEnables {
                             child_group_ref.upgrade().borrow().name(),
                             *child_group_go_guard,
                         );
+                        // child_go_cell
+                        let child_go_cell_opt =
+                            group_names_to_cells.get(&child_group_ref.upgrade().borrow().name());
+                        let child_go_cell = 
+                        match child_go_cell_opt {
+                            Some((go, _)) => go,
+                            None => panic!("Pass-specific cells for the group {} should exist!", child_group_ref.upgrade().borrow().name())
+                        };
+                        let mut new_asgn = assignment_ref.clone();
+                        new_asgn.dst = (*child_go_cell).borrow().get("in");
+                        asgns_to_add.push(new_asgn);
+                        // let child_go_cell_asgn = builder.build_assignment(
+                        //     one.borrow().get("in"),
+                        //     one.borrow().get("out"),
+                        //     *child_group_go_guard.clone(),
+                        // );
                         // let done_port_ref =
                         //     parent_group_ref.upgrade().borrow().get("done");
                         for child_asgn in child_group_ref
@@ -68,19 +102,11 @@ impl Visitor for InlineStructuralGroupEnables {
                             .assignments
                             .iter()
                         {
-                            // FIXME: it isn't as easy as just copying over all of the assignments?
-                            // (1) can't copy over the done port assignment, but we need to keep the guard for that.
-                            // within the rest of this group, need to iterate over all uses of child[done] and replace
-                            // with the guard for the done. (iterate until saturation?)
                             let mut child_modified_asgn = child_asgn.clone();
                             child_modified_asgn.guard = Box::new(Guard::and(
                                 *child_group_go_guard.clone(),
                                 *child_asgn.guard.clone(),
                             ));
-                            // child_modified_asgn.guard = Box::new(Guard::And(
-                            //     child_group_go_guard.clone(),
-                            //     child_asgn.guard.clone(),
-                            // ));
 
                             let child_dst_borrow = child_asgn.dst.borrow();
                             if let ir::PortParent::Group(_) =
@@ -92,23 +118,26 @@ impl Visitor for InlineStructuralGroupEnables {
                                     // child group's done condition. need to collect the guard to done
                                     let child_group_done_guard =
                                         child_asgn.guard.clone();
-                                    done_guards.insert(
-                                        child_group_ref
-                                            .upgrade()
-                                            .borrow()
-                                            .name(),
-                                        Box::new(Guard::and(
-                                            *(child_group_done_guard).clone(),
-                                            Guard::port(ir::rrc(
-                                                child_done_source.clone(),
-                                            )),
-                                        )), // Box::new(Guard::And(
-                                            //     child_group_done_guard.clone(),
-                                            //     Box::new(Guard::Port(ir::rrc(
-                                            //         child_done_source.clone(),
-                                            //     ))),
-                                            // )),
-                                    );
+                                    let child_done_cell = 
+                                    match group_names_to_cells.get(&child_group_ref.upgrade().borrow().name()) {
+                                        Some((_, done)) => done,
+                                        None => panic!("Pass-specific cells for the group {} should exist!", child_group_ref.upgrade().borrow().name())
+                                    };
+                                    child_modified_asgn.dst = child_done_cell.borrow().get("in");
+                                    asgns_to_add.push(child_modified_asgn);
+                                    // println!("{:?}", child_modified_asgn);
+                                    // done_guards.insert(
+                                    //     child_group_ref
+                                    //         .upgrade()
+                                    //         .borrow()
+                                    //         .name(),
+                                    //     Box::new(Guard::and(
+                                    //         *(child_group_done_guard).clone(),
+                                    //         Guard::port(ir::rrc(
+                                    //             child_done_source.clone(),
+                                    //         )),
+                                    //     )),
+                                    // );
                                 }
                             } else {
                                 asgns_to_add.push(child_modified_asgn);
@@ -126,33 +155,52 @@ impl Visitor for InlineStructuralGroupEnables {
             for assignment_ref in group.assignments.iter() {
                 // cases where the source is the child's done signal
                 let src_borrow = assignment_ref.src.borrow();
+                let child_done_cell_opt = 
                 if let ir::PortParent::Group(child_group_ref) =
                     &src_borrow.parent
                 {
                     // assignment gets transformed into
                     // dst = guard & *child[done]* : 1
-                    match &done_guards
-                        .get(&child_group_ref.upgrade().borrow().name())
-                    {
-                        Some(child_done_guard) => {
-                            let mut parent_modified_asgn =
-                                assignment_ref.clone();
-                            parent_modified_asgn.src = one.borrow().get("out");
-                            parent_modified_asgn.guard = Box::new(Guard::And(
-                                assignment_ref.guard.clone(),
-                                (*child_done_guard).clone(),
-                            ));
-                            // FIXME: remove original assignment
-                            keep_asgn[idx] = false;
-                            // add new assignment
-                            asgns_to_add.push(parent_modified_asgn);
-                        }
-                        None => panic!(
-                            "Child group ({})'s done guard should be in map",
-                            child_group_ref.upgrade().borrow().name()
-                        ),
+                    match group_names_to_cells.get(&child_group_ref.upgrade().borrow().name()) {
+                        Some((_, done)) => Some(done),
+                        None => panic!("Pass-specific cells for the group {} should exist!", child_group_ref.upgrade().borrow().name())
                     }
-                }
+                    // swap out the source with the generated wire
+
+                    // match &done_guards
+                    //     .get(&child_group_ref.upgrade().borrow().name())
+                    // {
+                    //     Some(child_done_guard) => {
+                    //         let mut parent_modified_asgn =
+                    //             assignment_ref.clone();
+                    //         parent_modified_asgn.src = one.borrow().get("out");
+                    //         parent_modified_asgn.guard = Box::new(Guard::and(
+                    //             *(assignment_ref.guard).clone(),
+                    //             *(**child_done_guard).clone(),
+                    //         ));
+                    //         // FIXME: remove original assignment
+                    //         keep_asgn[idx] = false;
+                    //         // add new assignment
+                    //         asgns_to_add.push(parent_modified_asgn);
+                    //     }
+                    //     None => panic!(
+                    //         "Child group ({})'s done guard should be in map",
+                    //         child_group_ref.upgrade().borrow().name()
+                    //     ),
+                    // }
+                } else {
+                    // the source isn't a child done.
+                    None
+                };
+                match child_done_cell_opt {
+                    Some(child_done_cell) => {
+                        let mut parent_modified_asgn = assignment_ref.clone();
+                        parent_modified_asgn.src = child_done_cell.borrow().get("out");
+                        keep_asgn[idx] = false;
+                        asgns_to_add.push(parent_modified_asgn);
+                    },
+                    None => ()
+                }                
                 // cases where the guard uses childrens' done signal
                 let mut modified_guard = assignment_ref.guard.clone();
                 let mut replaced_guard = false;
