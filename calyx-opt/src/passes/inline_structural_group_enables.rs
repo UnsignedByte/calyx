@@ -99,7 +99,6 @@ impl Visitor for InlineStructuralGroupEnables {
                                 Guard::port(child_go_cell.borrow().get("out")),
                                 *child_asgn.guard.clone(),
                             ));
-
                             let child_dst_borrow = child_asgn.dst.borrow();
                             if let ir::PortParent::Group(_) =
                                 &child_dst_borrow.parent
