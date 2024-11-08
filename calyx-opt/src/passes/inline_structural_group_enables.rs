@@ -70,12 +70,6 @@ impl Visitor for InlineStructuralGroupEnables {
                         keep_asgn.push(false);
                         // structural enable!
                         let child_group_go_guard = assignment_ref.guard.clone();
-                        println!(
-                            "Found a go! Parent: {}, Child: {}, Guard: {:?}",
-                            group.name(),
-                            child_group_ref.upgrade().borrow().name(),
-                            *child_group_go_guard,
-                        );
                         child_groups.push(child_group_ref.upgrade().borrow().name());
                         // child_go_cell
                         let child_go_cell_opt =
