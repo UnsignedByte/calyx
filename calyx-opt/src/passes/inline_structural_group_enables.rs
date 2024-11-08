@@ -96,7 +96,7 @@ impl Visitor for InlineStructuralGroupEnables {
                         {
                             let mut child_modified_asgn = child_asgn.clone();
                             child_modified_asgn.guard = Box::new(Guard::and(
-                                *child_group_go_guard.clone(),
+                                Guard::port(child_go_cell.borrow().get("out")),
                                 *child_asgn.guard.clone(),
                             ));
 
