@@ -39,11 +39,6 @@ impl Visitor for InlineStructuralGroupEnables {
     ) -> VisResult {
         let mut builder = ir::Builder::new(comp, sigs);
         let one = builder.add_constant(1, 1);
-        // get all groups in a map for easy access?
-        // let mut group_name_to_ref = HashMap::new();
-        // for group_ref in comp.groups.iter() {
-        //     group_name_to_ref.insert(group_ref.borrow().name(), group_ref);
-        // }
         // look for structural enables
         for group_ref in comp.groups.iter() {
             let mut group = group_ref.borrow_mut();
@@ -59,6 +54,12 @@ impl Visitor for InlineStructuralGroupEnables {
                         keep_asgn.push(false);
                         // structural enable!
                         let child_group_go_guard = assignment_ref.guard.clone();
+                        println!(
+                            "Found a go! Parent: {}, Child: {}, Guard: {:?}",
+                            group.name(),
+                            child_group_ref.upgrade().borrow().name(),
+                            *child_group_go_guard,
+                        );
                         // let done_port_ref =
                         //     parent_group_ref.upgrade().borrow().get("done");
                         for child_asgn in child_group_ref
@@ -72,10 +73,14 @@ impl Visitor for InlineStructuralGroupEnables {
                             // within the rest of this group, need to iterate over all uses of child[done] and replace
                             // with the guard for the done. (iterate until saturation?)
                             let mut child_modified_asgn = child_asgn.clone();
-                            child_modified_asgn.guard = Box::new(Guard::And(
-                                child_group_go_guard.clone(),
-                                child_asgn.guard.clone(),
+                            child_modified_asgn.guard = Box::new(Guard::and(
+                                *child_group_go_guard.clone(),
+                                *child_asgn.guard.clone(),
                             ));
+                            // child_modified_asgn.guard = Box::new(Guard::And(
+                            //     child_group_go_guard.clone(),
+                            //     child_asgn.guard.clone(),
+                            // ));
 
                             let child_dst_borrow = child_asgn.dst.borrow();
                             if let ir::PortParent::Group(_) =
@@ -92,12 +97,17 @@ impl Visitor for InlineStructuralGroupEnables {
                                             .upgrade()
                                             .borrow()
                                             .name(),
-                                        Box::new(Guard::And(
-                                            child_group_done_guard.clone(),
-                                            Box::new(Guard::Port(ir::rrc(
+                                        Box::new(Guard::and(
+                                            *(child_group_done_guard).clone(),
+                                            Guard::port(ir::rrc(
                                                 child_done_source.clone(),
-                                            ))),
-                                        )),
+                                            )),
+                                        )), // Box::new(Guard::And(
+                                            //     child_group_done_guard.clone(),
+                                            //     Box::new(Guard::Port(ir::rrc(
+                                            //         child_done_source.clone(),
+                                            //     ))),
+                                            // )),
                                     );
                                 }
                             } else {
@@ -121,8 +131,7 @@ impl Visitor for InlineStructuralGroupEnables {
                 {
                     // assignment gets transformed into
                     // dst = guard & *child[done]* : 1
-                    let done_guards_clone = done_guards.clone();
-                    match &done_guards_clone
+                    match &done_guards
                         .get(&child_group_ref.upgrade().borrow().name())
                     {
                         Some(child_done_guard) => {
@@ -144,17 +153,23 @@ impl Visitor for InlineStructuralGroupEnables {
                         ),
                     }
                 }
-                // cases where the guard uses a child's done signal (there can be multiple children though)
-                let mut guard = assignment_ref.guard.clone();
-                for (child_group, child_group_guard) in done_guards.into_iter()
+                // cases where the guard uses childrens' done signal
+                let mut modified_guard = assignment_ref.guard.clone();
+                let mut replaced_guard = false;
+                for (child_group, child_group_guard) in
+                    done_guards.clone().into_iter()
                 {
-                    guard.search_replace_group_done(
+                    replaced_guard |= modified_guard.search_replace_group_done(
                         child_group,
                         &child_group_guard,
                     );
                 }
-
-                // let new_guard = self.replace_guard(guard);
+                if replaced_guard {
+                    keep_asgn[idx] = false;
+                    let mut modified_asgn = assignment_ref.clone();
+                    modified_asgn.guard = modified_guard;
+                    asgns_to_add.push(modified_asgn);
+                }
                 // increment idx to update keep_asgn
                 idx += 1;
             }

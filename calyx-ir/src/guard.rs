@@ -387,17 +387,18 @@ impl<T> Guard<T> {
         &mut self,
         group_name: calyx_utils::Id,
         new_guard: &Guard<T>,
-    ) where
+    ) -> bool
+    where
         T: Clone,
     {
         match self {
             Guard::Or(guard, guard1) => {
-                guard.search_replace_group_done(group_name, new_guard);
-                guard1.search_replace_group_done(group_name, new_guard);
+                return guard.search_replace_group_done(group_name, new_guard)
+                    & guard1.search_replace_group_done(group_name, new_guard);
             }
             Guard::And(guard, guard1) => {
-                guard.search_replace_group_done(group_name, new_guard);
-                guard1.search_replace_group_done(group_name, new_guard);
+                return guard.search_replace_group_done(group_name, new_guard)
+                    & guard1.search_replace_group_done(group_name, new_guard);
             }
             Guard::Not(guard) => {
                 guard.search_replace_group_done(group_name, new_guard)
@@ -419,8 +420,9 @@ impl<T> Guard<T> {
                     let new_guard_clone = new_guard.clone();
                     self.update(|_| new_guard_clone);
                 }
+                return replace;
             }
-            _ => (),
+            _ => false,
         }
     }
 }
