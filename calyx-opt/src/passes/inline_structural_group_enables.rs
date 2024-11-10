@@ -1,7 +1,7 @@
 use std::{collections::HashMap};
 
 use crate::traversal::{Action, ConstructVisitor, Named, VisResult, Visitor};
-use calyx_ir::{self as ir, Guard};
+use calyx_ir::{self as ir, BoolAttr, Guard};
 
 // Removes structural enables by inlining callee into caller group.
 // Used by the profiler.
@@ -50,8 +50,10 @@ impl Visitor for InlineStructuralGroupEnables {
             let group_done_cell_name = format!("{}_enable_done", group_name);
             let group_go_cell =
                 builder.add_primitive(group_go_cell_name, "std_wire", &[1]);
+            group_go_cell.borrow_mut().add_attribute(BoolAttr::Control, 1);
             let group_done_cell =
                 builder.add_primitive(group_done_cell_name, "std_wire", &[1]);
+            group_done_cell.borrow_mut().add_attribute(BoolAttr::Control, 1);
             group_names_to_cells
                 .insert(group_name, (group_go_cell, group_done_cell));
         }
@@ -89,10 +91,6 @@ impl Visitor for InlineStructuralGroupEnables {
                             .iter()
                         {
                             let mut child_modified_asgn = child_asgn.clone();
-                            child_modified_asgn.guard = Box::new(Guard::and(
-                                Guard::port(child_go_cell.borrow().get("out")),
-                                *child_asgn.guard.clone(),
-                            ));
                             let child_dst_borrow = child_asgn.dst.borrow();
                             if let ir::PortParent::Group(_) =
                                 &child_dst_borrow.parent
@@ -104,11 +102,14 @@ impl Visitor for InlineStructuralGroupEnables {
                                         None => panic!("Pass-specific cells for the group {} should exist!", child_group_ref.upgrade().borrow().name())
                                     };
                                     child_modified_asgn.dst = child_done_cell.borrow().get("in");
-                                    asgns_to_add.push(child_modified_asgn);
                                 }
                             } else {
-                                asgns_to_add.push(child_modified_asgn);
+                                child_modified_asgn.guard = Box::new(Guard::and(
+                                    Guard::port(child_go_cell.borrow().get("out")),
+                                    *child_asgn.guard.clone(),
+                                ));
                             }
+                            asgns_to_add.push(child_modified_asgn);
                         }
                     } else {
                         keep_asgn.push(true);
