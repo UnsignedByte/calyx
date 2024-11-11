@@ -49,6 +49,15 @@ fi
 
 CALYX_ARGS=" -p static-inline -p compile-static -p compile-repeat -p compile-invoke -p profiler-instrumentation -p all"
 
+intermediate_file=${TMP_DIR}/intermediate.futil
+
+# Run instrumentation bit first
+echo "[${SCRIPT_NAME}] Adding instrumentation to Calyx program"
+(
+    set -o xtrace
+    cargo run -- ${INPUT_FILE} -o ${intermediate_file} -p prof-inst
+) &> ${LOGS_DIR}/gol-generate-intermediate-calyx
+
 # Run component-cells backend to get cell information
 echo "[${SCRIPT_NAME}] Obtaining cell information from component-cells backend"
 (
@@ -66,7 +75,7 @@ fi
 echo "[${SCRIPT_NAME}] Obtaining VCD file via simulation"
 (
     set -o xtrace
-    fud2 ${INPUT_FILE} -o ${VCD_FILE} --through verilator -s calyx.args="${CALYX_ARGS}" -s sim.data=${SIM_DATA_JSON}
+    fud2 ${intermediate_file} -o ${VCD_FILE} --through verilator -s sim.data=${SIM_DATA_JSON} # -s calyx.args="${CALYX_ARGS}" 
     set +o xtrace
 ) &> ${LOGS_DIR}/gol-vcd
 

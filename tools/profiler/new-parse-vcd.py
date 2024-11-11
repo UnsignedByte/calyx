@@ -1,8 +1,9 @@
 import csv
+import json
 import os
 import re
+import shutil
 import sys
-import json
 import vcdvcd
 
 def remove_size_from_name(name: str) -> str:
@@ -154,6 +155,7 @@ class VCDConverter(vcdvcd.StreamParserCallbacks):
         clock_name = f"{self.main_component}.clk"
         clock_cycles = -1
         started = False
+        currently_active = set()
         for ts in self.timestamps_to_events:
             events = self.timestamps_to_events[ts]
             started = started or [x for x in events if x["signal"] == f"{self.main_component}.go" and x["value"] == 1]
@@ -168,15 +170,21 @@ class VCDConverter(vcdvcd.StreamParserCallbacks):
                 if signal_name.endswith(".go") and value == 1: # cells have .go and .done
                     cell = signal_name.split(".go")[0]
                     self.profiling_info[cell].start_new_segment(clock_cycles)
+                    currently_active.add(cell)
                 if signal_name.endswith(".done") and value == 1: # cells have .go and .done
                     cell = signal_name.split(".done")[0]
                     self.profiling_info[cell].end_current_segment(clock_cycles)
+                    currently_active.remove(cell)
                 if "_probe_out" in signal_name and value == 1: # instrumented group started being active
                     encoded_info = signal_name.split("_probe_out")[0]
                     self.profiling_info[encoded_info].start_new_segment(clock_cycles)
+                    currently_active.add(encoded_info)
                 elif "_probe_out" in signal_name and value == 0: # instrumented group stopped being active
                     encoded_info = signal_name.split("_probe_out")[0]
                     self.profiling_info[encoded_info].end_current_segment(clock_cycles)
+                    currently_active.remove(encoded_info)
+        for active in currently_active: # anything that is still around...
+            self.profiling_info[active].end_current_segment(clock_cycles)
 
         self.clock_cycles = clock_cycles
 
@@ -267,6 +275,7 @@ def create_traces(profiled_info, total_cycles, main_component):
     return new_timeline_map
 
 def create_output(timeline_map, out_dir):
+    shutil.rmtree(out_dir)
     os.mkdir(out_dir)
     for i in timeline_map:
         fpath = os.path.join(out_dir, f"cycle{i}.dot")
