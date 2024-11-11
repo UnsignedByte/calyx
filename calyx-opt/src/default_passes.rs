@@ -156,6 +156,29 @@ impl PassManager {
             ["validate", "pre-opt", "compile", "post-opt", "lower",]
         );
 
+        register_alias!(
+            pm,
+            "prof-inst",
+            [
+                ProfilerInstrumentation,
+                InlineStructuralGroupEnables,
+                DeadGroupRemoval
+            ]
+        );
+
+        register_alias!(
+            pm,
+            "all-inst",
+            [
+                "prof-inst",
+                "validate",
+                "pre-opt",
+                "compile",
+                "post-opt",
+                "lower",
+            ]
+        );
+
         // Compilation flow with no optimizations enables
         register_alias!(
             pm,

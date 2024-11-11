@@ -7,25 +7,25 @@ component main() -> () {
   }
 
   wires {
-    group wr_a {
+    group top {
       a.addr0 = 1'b0;
       a.write_en = 1'b1;
       a.write_data = 32'd1;
-      wr_a[done] = a.done;
+      top[done] = a.done;
     }
 
-    group wr_c {
-      wr_a[go] = 1'b1;
-      wr_c[done] = wr_a[done];
+    group middle {
+      top[go] = 1'b1;
+      middle[done] = top[done];
     }
 
-    group wr_b {
-    wr_c[go] = 1'b1;
-    wr_b[done] = wr_c[done];
+    group bottom {
+    middle[go] = 1'b1;
+    bottom[done] = middle[done];
     }
   }
 
   control {
-      wr_b;
+      bottom;
   }
 }
