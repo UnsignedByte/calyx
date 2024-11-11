@@ -40,13 +40,15 @@ impl Visitor for InlineStructuralGroupEnables {
         let mut builder = ir::Builder::new(comp, sigs);
         let one = builder.add_constant(1, 1);
         // NOTE: going to work on a three step process.
-        // (1) iterate solely to get each child and their go and done guards
+        // (1) iterate solely to get each child and their go and done guards, and assignments. If go's src is a port then we need to & the port.
+        // (2) iterate through original assignments, replace/remove all assignments that refer to children.
         // look for structural enables
         for group_ref in comp.groups.iter() {
             let mut group = group_ref.borrow_mut();
             let mut asgns_to_add = Vec::new();
+            let mut child_group_to_asgns = HashMap::new();
             let mut done_guards = HashMap::new();
-            let mut keep_asgn = Vec::new();
+            let mut keep_asgn = Vec::new(); // tracker to see whether assignment from original group should be preserved
             for assignment_ref in group.assignments.iter() {
                 let dst_borrow = assignment_ref.dst.borrow();
                 if let ir::PortParent::Group(child_group_ref) =
@@ -54,28 +56,33 @@ impl Visitor for InlineStructuralGroupEnables {
                 {
                     if dst_borrow.name == "go" {
                         keep_asgn.push(false);
+                        println!("Pushing false for {:?}", assignment_ref);
                         // structural enable!
-                        let child_group_go_guard = assignment_ref.guard.clone();
+                        // if the src is a port, then we want to and it to the guard.
+                        let src_borrow = assignment_ref.src.borrow();
+                        println!("Getting port {:?}", src_borrow);
+                        let child_group_go_guard =
+                            if let ir::PortParent::Group(_) = &src_borrow.parent
+                            {
+                                Box::new(Guard::and(
+                                    *assignment_ref.guard.clone(),
+                                    Guard::port(ir::rrc(src_borrow.clone())),
+                                ))
+                            } else {
+                                assignment_ref.guard.clone()
+                            };
+                        let mut child_modified_asgns = Vec::new();
                         for child_asgn in child_group_ref
                             .upgrade()
                             .borrow()
                             .assignments
                             .iter()
                         {
-                            // FIXME: it isn't as easy as just copying over all of the assignments?
-                            // (1) can't copy over the done port assignment, but we need to keep the guard for that.
-                            // within the rest of this group, need to iterate over all uses of child[done] and replace
-                            // with the guard for the done. (iterate until saturation?)
                             let mut child_modified_asgn = child_asgn.clone();
                             child_modified_asgn.guard = Box::new(Guard::and(
                                 *child_group_go_guard.clone(),
                                 *child_asgn.guard.clone(),
                             ));
-                            // child_modified_asgn.guard = Box::new(Guard::And(
-                            //     child_group_go_guard.clone(),
-                            //     child_asgn.guard.clone(),
-                            // ));
-
                             let child_dst_borrow = child_asgn.dst.borrow();
                             if let ir::PortParent::Group(_) =
                                 &child_dst_borrow.parent
@@ -100,9 +107,15 @@ impl Visitor for InlineStructuralGroupEnables {
                                     );
                                 }
                             } else {
+                                child_modified_asgns
+                                    .push(child_modified_asgn.clone());
                                 asgns_to_add.push(child_modified_asgn);
                             }
                         }
+                        child_group_to_asgns.insert(
+                            child_group_ref.upgrade().borrow().name(),
+                            child_modified_asgns,
+                        );
                     } else {
                         keep_asgn.push(true);
                     }
@@ -110,11 +123,21 @@ impl Visitor for InlineStructuralGroupEnables {
                     keep_asgn.push(true);
                 }
             }
+            println!("PRINTING DONE GUARDS");
+            for (dg_name, dg_val) in done_guards.clone().into_iter() {
+                println!("name: {}, value: {:?}", dg_name, dg_val);
+            }
             let mut idx = 0;
+            let mut all_assignments = 
             // second iteration to modify all uses of any child's done signal
             for assignment_ref in group.assignments.iter() {
                 // cases where the source is the child's done signal
                 let src_borrow = assignment_ref.src.borrow();
+                if keep_asgn[idx] == false {
+                    // skip any assignments that we already know are true
+                    idx += 1;
+                    continue;
+                }
                 if let ir::PortParent::Group(child_group_ref) =
                     &src_borrow.parent
                 {
@@ -147,6 +170,10 @@ impl Visitor for InlineStructuralGroupEnables {
                 for (child_group, child_group_guard) in
                     done_guards.clone().into_iter()
                 {
+                    println!(
+                        "child group name: {}, guard: {:?}",
+                        child_group, child_group_guard
+                    );
                     replaced_guard |= modified_guard.search_replace_group_done(
                         child_group,
                         &child_group_guard,
@@ -162,8 +189,10 @@ impl Visitor for InlineStructuralGroupEnables {
                 idx += 1;
             }
             debug_assert_eq!(keep_asgn.len(), group.assignments.len());
+            println!("vec: {:?}", keep_asgn);
             let mut keep_iter = keep_asgn.into_iter();
             group.assignments.retain(|_| keep_iter.next().unwrap());
+            println!("Size of assignments: {}", group.assignments.len());
             for asgn_to_add in asgns_to_add.into_iter() {
                 group.assignments.push(asgn_to_add);
             }
