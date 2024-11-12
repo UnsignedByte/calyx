@@ -63,11 +63,11 @@ impl Visitor for ProfilerInstrumentation {
                         let invoked_group_name =
                             parent_group_ref.upgrade().borrow().name();
                         let guard = *(assigment_ref.guard.clone());
-                        let combined_guard: Guard<Nothing> = Guard::And(
-                            Box::new(guard),
-                            Box::new(Guard::Not(Box::new(Guard::port(
+                        let combined_guard: Guard<Nothing> = Guard::and(
+                            guard,
+                            Guard::Not(Box::new(Guard::port(
                                 done_port_ref.clone(),
-                            )))),
+                            ))),
                         );
                         match self.group_map.get_mut(&invoked_group_name) {
                             Some(vec_ref) => {
